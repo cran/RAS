@@ -17,7 +17,7 @@ ras_validate(
 }
 \arguments{
 \item{this.result}{List. Output from
-\code{\link{ras_detect}}.}
+\code{\link{ras_detect_original}}.}
 
 \item{x}{Numeric vector. Predictor sequence used in the original scan.}
 
@@ -58,7 +58,7 @@ changepoints.}
 }
 \description{
 Validates candidate changepoints from
-\code{\link{ras_detect}} by re-running local
+\code{\link{ras_detect_original}} by re-running local
 Davies tests in windows around each candidate.
 }
 \details{
@@ -86,14 +86,15 @@ the scan grid to genomic coordinates via
 \examples{
 \donttest{
 set.seed(42)
-x <- 1:300
-y <- c(seq(0, 8, length.out = 150),
-       seq(8, 1, length.out = 150)) + rnorm(300, sd = 0.5)
+x <- 1:100
+y <- c(seq(0, 8, length.out = 50),
+       seq(8, 1, length.out = 50)) + rnorm(100, sd = 0.5)
 
-cp_result <- ras_detect(
+cp_result <- ras_detect_original(
   x, y,
-  window_size             = 150,
-  slope_check_window_size = 20,
+  window_size             = 50,
+  skip                    = 2,
+  slope_check_window_size = 10,
   slope.p.values.threshold.left  = 1e-3,
   slope.p.values.threshold.right = 1e-3
 )
@@ -101,15 +102,15 @@ cp_result <- ras_detect(
 final <- ras_validate(
   cp_result, x = x, y = y,
   this.skip          = 1,
-  second_window_size = 30,
+  second_window_size = 20,
   p.value.threshold  = 1e-3
 )
 cat("Validated changepoints:", final$tau_hats, "\n")
 }
 }
 \seealso{
-\code{\link{ras_detect}} for the first-pass
+\code{\link{ras_detect_original}} for the first-pass
 detection step whose output this function takes as input.
 \code{\link{plot.ras}} for visualising the validated changepoints.
-\code{\link{ras}} for the recommended end-to-end entry point.
+\code{\link{ras_original}} for the recommended end-to-end entry point.
 }

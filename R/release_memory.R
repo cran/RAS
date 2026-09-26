@@ -1,12 +1,14 @@
 #' Release Memory Back to the OS
 #'
-#' Runs full garbage collection and, on Linux/glibc, calls
-#' \code{malloc_trim(0)} to return free heap pages to the operating system.
-#' Useful after large temporary matrices are removed in memory-heavy RAS
-#' pipeline stages.
+#' Runs full garbage collection and, on Linux with the GNU C library (glibc),
+#' calls \code{malloc_trim(0)} to return free heap pages to the operating
+#' system. Useful after large temporary matrices are removed in memory-heavy
+#' RAS pipeline stages.
 #'
-#' On non-Linux platforms the C call is skipped and \code{NA} is returned
-#' silently; no error is raised.
+#' \code{malloc_trim()} is a glibc extension. On every other platform,
+#' including Linux systems with another C library such as musl (Alpine
+#' Linux), Windows and macOS, the call is not compiled in and \code{NA} is
+#' returned silently; no error is raised.
 #'
 #' @param verbose Logical. If \code{TRUE} (default), prints a one-line message
 #'   with the \code{malloc_trim} return value so RSS changes can be monitored
@@ -15,7 +17,8 @@
 #' @return Invisibly returns the \code{malloc_trim(0)} result:
 #'   \code{1} if heap pages were returned to the OS,
 #'   \code{0} if nothing was returned,
-#'   \code{NA_integer_} on non-Linux platforms.
+#'   \code{NA_integer_} where \code{malloc_trim()} is unavailable (all
+#'   platforms other than glibc Linux).
 #' @export
 release_memory <- function(verbose = TRUE) {
   invisible(gc(full = TRUE))
@@ -30,4 +33,11 @@ release_memory <- function(verbose = TRUE) {
   }
 
   invisible(out)
+}
+
+# TRUE when this build of the package was compiled with glibc's malloc_trim()
+# (Linux/glibc), FALSE elsewhere. Internal; used by the unit tests to decide
+# what release_memory() must return on the current platform.
+.ras_malloc_trim_available <- function() {
+  isTRUE(.Call("RAS_malloc_trim_available", PACKAGE = "RAS"))
 }

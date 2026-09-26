@@ -17,7 +17,10 @@ ras(
   save_dir = file.path(tempdir(), "RAS"),
   min_window_size = 5,
   max_window_size = 100,
-  scan_test = c("glm", "score"),
+  scan_test = c("score", "glm"),
+  chunk_snps = 5000,
+  cores = 1,
+  keep_reps = FALSE,
   cp_p_threshold = 0.01,
   cp_window_size = 3000,
   cp_min_length = 10,
@@ -27,6 +30,14 @@ ras(
   second_window_size = 50,
   second_p_threshold = 1e-10,
   min_signal = 2.5,
+  detector = c("box", "changepoint"),
+  box_threshold = NULL,
+  box_calibration = NULL,
+  box_level0 = NA_real_,
+  box_null = 100,
+  box_alpha = 0.05,
+  box_null_n = NULL,
+  box_method = c("order", "gumbel"),
   run_plots = TRUE,
   plot_device = "pdf",
   plot_p_threshold = 8,
@@ -34,200 +45,228 @@ ras(
 )
 }
 \arguments{
-\item{geno}{Matrix of genotype dosages (\eqn{n} samples \eqn{\times}
-\eqn{N} variants). Rows must be aligned with \strong{phenotype} and
-\strong{covariates}.}
+\item{geno}{Either the path to a \code{.rasbin} genotype file (written by
+\code{\link{geno_to_rasbin}} or \code{\link{bed_to_rasbin}}), or an
+in-memory numeric genotype matrix (\eqn{n} samples by \eqn{N} variants).
+A matrix is converted to a temporary \code{.rasbin} file for the run;
+convert once with \code{\link{geno_to_rasbin}} when running repeatedly.}
 
-\item{phenotype}{Numeric vector of length \eqn{n}. Raw phenotype values.
-For continuous traits the function residualises covariates from the
-training phenotype internally each repetition; pass the original
-un-residualised values here.}
+\item{phenotype}{Numeric vector of length \eqn{n}, in the sample order of
+\code{geno}.}
 
-\item{covariates}{Data frame with \eqn{n} rows aligned with \strong{geno}.
-Must contain all columns named in \strong{covariate_cols}; additional
-columns (e.g., an ID column) are silently ignored.}
+\item{covariates}{Data frame with \eqn{n} rows, in the sample order of
+\code{geno}.}
 
-\item{covariate_cols}{Character vector of column names in \strong{covariates}
-to include in the regression models.}
+\item{covariate_cols}{Character vector. Names of the columns of
+\code{covariates} to adjust for.}
 
-\item{is_continuous}{Logical. \code{TRUE} for quantitative traits,
-\code{FALSE} for binary (case/control) traits.}
+\item{is_continuous}{Logical. \code{TRUE} for a quantitative trait,
+\code{FALSE} for a binary (0/1) trait.}
 
-\item{num_rep}{Integer. Number of independent 50/50 splits to average over.
-Default \code{5}.}
+\item{num_rep}{Integer. Number of train/hold-out repetitions to average
+over. Default \code{5}.}
 
-\item{skip1}{Integer. Step size for the primary SNP position grid
-(\code{seq(1, N, by = skip1)}).  Default \code{10}.}
+\item{skip1}{Integer. Stride of the profile grid in SNPs: the profile has
+one value every \code{skip1} SNPs. Default \code{10}.}
 
-\item{skip2}{Integer. Sub-step used to grow the scan window at each grid
-position.  Default \code{20}.}
+\item{skip2}{Integer. Step, in SNPs, by which the scan window grows from
+\code{min_window_size} to \code{max_window_size} at each grid position.
+Default \code{20}.}
 
-\item{chrom}{Integer. Chromosome number used in saved file names.
-Default \code{1}.}
+\item{chrom}{Integer or character. Chromosome label used in the output file
+names. Default \code{1}.}
 
-\item{save_dir}{Character. Directory for intermediate \code{.rds} output
-files; created recursively if it does not exist.  Defaults to a
-per-session subdirectory of \code{\link[base]{tempdir}()}; set an explicit
-path to keep the outputs.}
+\item{save_dir}{Character or \code{NULL}. Directory that receives the
+per-repetition coefficient matrices and the averaged profile; \code{NULL}
+writes nothing. Default \code{file.path(tempdir(), "RAS")}.}
 
-\item{min_window_size}{Integer. Minimum scan window half-size passed to
-\code{\link{screen_forward_max_region}}.  Default \code{5}.}
+\item{min_window_size, max_window_size}{Integer. Smallest and largest scan
+window, in SNPs. Default \code{5} and \code{100}.}
 
-\item{max_window_size}{Integer. Maximum scan window half-size passed to
-\code{\link{screen_forward_max_region}}.  Default \code{100}.}
+\item{scan_test}{Character. Per-window test for a binary trait:
+\code{"score"} (default, Rao score test in closed form) or \code{"glm"}
+(per-window logistic regression, the default of RAS 1.0.x).
+\code{"glm"} runs the in-memory implementation
+\code{\link{ras_scan_original}} and therefore needs a genotype matrix,
+not a \code{.rasbin} path. Ignored for continuous traits.}
 
-\item{scan_test}{Character. Per-window test for binary traits, passed to
-\code{\link{screen_forward_max_region}}.  \code{"glm"} (default) fits a
-full logistic model per window (Wald p-value); \code{"score"} fits the
-null logistic model once and uses a Rao score test per window
-(asymptotically equivalent, much faster at scale).  Has no effect for
-continuous traits.}
+\item{chunk_snps}{Integer. SNP columns held in memory at a time. Bounds
+peak memory at roughly \code{n * chunk_snps * 8} bytes per worker.
+Default \code{5000}.}
 
-\item{cp_p_threshold}{Numeric. Davies test p-value threshold for
-first-pass candidate changepoints.  Default \code{0.01}.}
+\item{cores}{Integer. Number of worker processes the repetitions are spread
+over (a PSOCK cluster). Default \code{1}. Each worker draws its own
+random-number stream, so results with \code{cores > 1} are not
+bit-identical to a serial run with the same seed, and peak memory grows
+roughly in proportion to \code{cores}.}
 
-\item{cp_window_size}{Integer. Sliding window width for first-pass
-detection.  Default \code{3000}.}
+\item{keep_reps}{Logical. Also return (as \code{$reps}) and save the
+individual per-repetition profiles, which are needed to study the
+split-to-split variability that the average removes. Default
+\code{FALSE}.}
 
-\item{cp_min_length}{Integer. Minimum segment length before and after a
-candidate changepoint.  Default \code{10}.}
+\item{cp_p_threshold}{Numeric. Davies test p-value threshold for a
+first-pass candidate changepoint. Default \code{0.01}.}
 
-\item{cp_slope_check_window}{Integer. Half-width of the local window used
-to verify slope direction around each candidate.  Default \code{30}.}
+\item{cp_window_size}{Integer. Width, in grid points, of the sliding window
+of the first pass. Default \code{3000}.}
 
-\item{cp_slope_left}{Numeric. One-tailed p-value threshold for the
-left-side slope test (tests that the slope to the left of the candidate
-is significantly positive).  Default \code{1e-10}.}
+\item{cp_min_length}{Integer. Minimum number of grid points on each side of
+a candidate. Default \code{10}.}
 
-\item{cp_slope_right}{Numeric. One-tailed p-value threshold for the
-right-side slope test (tests that the slope to the right is
-significantly negative).  Default \code{1e-20}.}
+\item{cp_slope_check_window}{Integer. Half-width, in grid points, of the
+local window in which the slopes on each side of a candidate are tested.
+Default \code{30}.}
 
-\item{second_window_size}{Integer. Half-window size for second-pass local
-Davies tests.  Default \code{50}.}
+\item{cp_slope_left, cp_slope_right}{Numeric. One-tailed p-value thresholds
+for the rising left slope and the falling right slope. Default
+\code{1e-10} and \code{1e-20}.}
 
-\item{second_p_threshold}{Numeric. Davies test p-value threshold for
-second-pass validation.  Default \code{1e-10}.}
+\item{second_window_size}{Integer. Half-width, in grid points, of the
+second-pass local Davies tests. Default \code{50}.}
 
-\item{min_signal}{Numeric. Minimum \eqn{-\log_{10}(p)} scan value required
-to retain a validated changepoint (passed to \code{\link{ras_validate}});
-also used as the low-signal colour boundary in all diagnostic plots.
+\item{second_p_threshold}{Numeric. Davies test p-value threshold of the
+second pass. Default \code{1e-10}.}
+
+\item{min_signal}{Numeric. Minimum profile value \eqn{-\log_{10}(p)} at a
+changepoint for it to be kept; also the colour boundary in the plots.
 Default \code{2.5}.}
 
-\item{run_plots}{Logical. If \code{TRUE} (default), saves diagnostic plots
-via \code{\link{plot_ras_scan}} and \code{\link{plot_ras_zoom_regions}}.}
+\item{detector}{Character. \code{"box"} (default): the box-scan detector
+\code{\link{ras_box_detect}}, which reports intervals
+\eqn{[\tau_L, \tau_R]} and also delimits broad plateau-shaped regions.
+\code{"changepoint"}: the two-pass changepoint detector of RAS 1.0.x,
+\code{\link{ras_detect}} then \code{\link{ras_validate}}, which reports
+single positions. The \code{box_*} arguments belong to \code{"box"}, the
+\code{cp_*}, \code{second_*} and \code{min_signal} arguments to
+\code{"changepoint"}.}
 
-\item{plot_device}{Character. Output device for plots: \code{"pdf"}
-(default), \code{"png"}, or \code{"screen"}.}
+\item{box_threshold}{Numeric or \code{NULL}. Fixed score threshold for
+\code{detector = "box"}. \code{NULL} (default) uses
+\code{box_calibration}, or calibrates on \code{box_null} permutations.}
 
-\item{plot_p_threshold}{Numeric. Significance reference line drawn on plots
-(on the \eqn{-\log_{10}} scale).  Default \code{8}.}
+\item{box_calibration}{A \code{\link{ras_box_calibrate}} result or
+\code{NULL} (default). Supplies the threshold and \code{level0} for
+\code{detector = "box"} and skips the permutation calibration.}
 
-\item{plot_y_cap}{Numeric or \code{NULL}. If provided, the y-axis is
-capped at this value and positions above the cap are annotated with
-arrows.  Default \code{NULL} (no cap).}
+\item{box_level0}{Numeric. Null-profile median for the box scan's level
+factor (see \code{\link{ras_box_stat}}). \code{NA} (default) takes it
+from \code{box_calibration} when given and otherwise disables the factor.}
+
+\item{box_null}{Integer. Number of permuted-phenotype scans used to
+calibrate the box-scan threshold when neither \code{box_threshold} nor
+\code{box_calibration} is given. Default \code{100}. Continuous
+phenotypes are permuted as residuals after the covariates
+(Freedman-Lane); binary phenotypes are permuted directly. \code{0}
+disables the calibration, in which case a threshold must be supplied.}
+
+\item{box_alpha}{Numeric. Family-wise error rate of the calibrated
+threshold. Default \code{0.05}.}
+
+\item{box_null_n}{Integer or \code{NULL}. Number of samples, drawn at
+random once, on which the permuted-phenotype scans are run. \code{NULL}
+(default) uses all samples. The null distribution of the profile maximum
+depends on the linkage structure, not on the sample size, so a subset of
+a few tens of thousands of individuals calibrates a biobank-scale cohort
+at a fraction of the cost (on a 352-pig chromosome, subsets of a third
+and a sixth of the animals gave thresholds within 3 percent of the
+full-sample one).}
+
+\item{box_method}{Character. How the calibrated threshold is read off the
+null maxima: \code{"order"} (default, exact order statistic, use with
+\code{box_null} of 100 or more) or \code{"gumbel"} (Gumbel fit, usable
+from \code{box_null = 20} with a slightly liberal threshold). See
+\code{\link{ras_box_calibrate}}.}
+
+\item{run_plots}{Logical. Save the diagnostic plots to \code{save_dir}.
+Default \code{TRUE}.}
+
+\item{plot_device}{Character. \code{"pdf"} (default), \code{"png"} or
+\code{"screen"}.}
+
+\item{plot_p_threshold}{Numeric. Significance reference line drawn on the
+plots, on the \eqn{-\log_{10}} scale. Default \code{8}.}
+
+\item{plot_y_cap}{Numeric or \code{NULL}. Cap of the plotted y-axis.
+Default \code{NULL}.}
 }
 \value{
-Invisibly returns a named list with two elements:
-\describe{
-\item{\code{scan}}{A list with elements:
-\describe{
-\item{\code{x}}{Integer vector. SNP position index grid
-\code{seq(1, N, by = skip1)}.}
-\item{\code{y}}{Numeric vector (same length as \code{x}). Averaged
-\eqn{-\log_{10}(p)}-value profile across all repetitions.}
-}
-}
-\item{\code{detection}}{A list returned by \code{\link{ras_validate}}
-with elements:
-\describe{
-\item{\code{tau_hats}}{Integer vector. Validated changepoint positions
-(re-mapped to genomic coordinates via \strong{this.start} and
-\strong{this.skip}).}
-\item{\code{all.changepoints}}{Integer vector. All candidate positions
-examined during the first pass, re-mapped to genomic coordinates.}
-\item{\code{all.p.values}}{Numeric vector. \eqn{-\log_{10}(p)} Davies
-test values for every candidate in \code{all.changepoints}.}
-\item{\code{left.slopes}}{Numeric vector. Estimated left-side slopes
-at each validated changepoint.}
-\item{\code{right.slopes}}{Numeric vector. Estimated right-side slopes
-at each validated changepoint.}
-}
-}
-}
-Plot files (if \code{run_plots = TRUE}) are written to \code{save_dir}
-with names \code{chr-<chrom>-cp-plot.<ext>},
-\code{chr-<chrom>-cp-p-values-plot.<ext>}, and
-\code{chr-<chrom>-zoom.<ext>}.
+Invisibly, an object of class \code{"ras"}: a list with
+\code{scan} (the \code{\link{ras_scan}} result), \code{detection} (for
+\code{detector = "box"} the \code{\link{ras_box_detect}} result, whose
+\code{regions} table has one row per interval; for
+\code{detector = "changepoint"} the \code{\link{ras_validate}} result,
+whose \code{tau_hats} are the detected positions),
+\code{box_calibration} (the calibration used, or \code{NULL}),
+\code{chrom} and \code{save_dir}. Use \code{print()} and \code{plot()}
+on it.
 }
 \description{
-Detect significant association regions in GWAS data.
-Returns an object of class \code{"ras"}.
+One-call entry point of the package. Runs the RAS pipeline on one
+chromosome: the Stage-1 scan (\code{\link{ras_scan}}), region detection on
+the resulting profile with the box-scan detector
+(\code{\link{ras_box_detect}}, default) or the changepoint detector
+(\code{\link{ras_detect}} followed by \code{\link{ras_validate}}), and the
+diagnostic plots (\code{\link{plot.ras}}). Genotypes are streamed from a
+\code{.rasbin} file; an in-memory genotype matrix is accepted as well.
 }
 \details{
-For a stage-by-stage description of the pipeline see \code{\link{RAS}}.
+The box-scan threshold is calibrated on the data: unless
+\code{box_calibration} or \code{box_threshold} is supplied, the scan is
+repeated on \code{box_null} permuted phenotypes and the threshold is the
+order statistic of their maximum scores at level \code{box_alpha}
+(\code{\link{ras_box_calibrate}}), which controls the family-wise error
+rate without distributional assumptions. This multiplies the run time by
+about \code{box_null}; for large cohorts calibrate once with
+\code{\link{ras_box_calibrate}} and pass the result.
+
+The pure-R, in-memory implementation that RAS 1.0.x shipped as
+\code{ras()} is available as \code{\link{ras_original}}; it defaults to
+the changepoint detector, and with \code{detector = "changepoint"} the two
+functions give the same scan profile to machine precision and the same
+detected positions.
 }
-\section{Simple (recommended)}{
-
-\preformatted{
-## one call does everything
-result <- ras(geno, phenotype, covariates,
-              covariate_cols = c("age", "sex", paste0("pc", 1:10)),
-              is_continuous  = TRUE,
-              chrom = 1, save_dir = "results/")
-
-print(result)             # detected changepoint positions
-plot(result)              # full-chromosome scan profile
-plot(result, zoom = TRUE) # zoomed view around each changepoint
-}
-
-For step-by-step control see \code{\link{ras_scan}},
-\code{\link{ras_detect}}, \code{\link{ras_validate}}.
-}
-
 \examples{
 \donttest{
-set.seed(42)
-n_samp <- 80; n_snp <- 60
-geno <- matrix(
-  sample(0:2, n_samp * n_snp, replace = TRUE, prob = c(0.6, 0.3, 0.1)),
-  nrow = n_samp, ncol = n_snp)
-pheno <- rnorm(n_samp)
+set.seed(3)
+n_samp <- 120; n_snp <- 400
+geno <- matrix(sample(0:2, n_samp * n_snp, replace = TRUE,
+                      prob = c(0.6, 0.3, 0.1)), n_samp, n_snp)
+causal <- 181:220                       # 40 causal SNPs, together explaining
+pheno  <- 2 * as.numeric(scale(rowSums(geno[, causal]))) + rnorm(n_samp)  # ~80\% of the variance
 cov_df <- data.frame(age = rnorm(n_samp), sex = rbinom(n_samp, 1, 0.5))
-cov_df$age_squared <- cov_df$age^2
-cov_df$age_sex     <- cov_df$age * cov_df$sex
-for (i in 1:10) cov_df[[paste0("pc", i)]] <- rnorm(n_samp)
 
-result <- ras(
-  geno              = geno,
-  phenotype         = pheno,
-  covariates        = cov_df,
-  covariate_cols    = c("age", "sex", "age_squared", "age_sex",
-                        paste0("pc", 1:10)),
-  is_continuous     = TRUE,
-  num_rep           = 2,
-  skip1             = 5,
-  skip2             = 5,
-  min_window_size   = 2,
-  max_window_size   = 10,
-  chrom             = 1,
-  save_dir          = tempdir(),
-  run_plots         = TRUE,
-  plot_device       = "png"
-)
+## default: box-scan detector, threshold calibrated on permuted phenotypes
+## (20 permutations with the Gumbel fit keep the example short; the
+## default is the exact order statistic on 100 permutations)
+res <- ras(geno, pheno, cov_df, covariate_cols = c("age", "sex"),
+           is_continuous = TRUE, num_rep = 2, skip1 = 2, skip2 = 5,
+           min_window_size = 2, max_window_size = 20,
+           box_null = 20, box_method = "gumbel",
+           save_dir = tempdir(), run_plots = FALSE)
+res$detection$regions
+res$box_calibration
 
-cat("Detected changepoints:", result$detection$tau_hats, "\n")
-plot(result$scan$x, result$scan$y, type = "l",
-     xlab = "SNP index", ylab = expression(-log[10](p)),
-     main = "RAS scan profile")
+## large data: convert once and pass the file; here with the changepoint
+## detector of RAS 1.0.x (settings scaled down to the 200-point profile)
+rb <- tempfile(fileext = ".rasbin")
+geno_to_rasbin(geno, rb)
+res_cp <- ras(rb, pheno, cov_df, covariate_cols = c("age", "sex"),
+              is_continuous = TRUE, num_rep = 2, skip1 = 2, skip2 = 5,
+              min_window_size = 2, max_window_size = 20,
+              detector = "changepoint",
+              cp_window_size = 100, cp_slope_check_window = 10,
+              cp_slope_left = 1e-2, cp_slope_right = 1e-2,
+              second_window_size = 20, second_p_threshold = 1e-2,
+              save_dir = tempdir(), run_plots = FALSE)
+res_cp$detection$tau_hats
+unlink(c(rb, paste0(rb, ".meta.rds")))
 }
 }
 \seealso{
-\code{\link{ras_scan}} for the scan-only step (useful when tuning
-changepoint parameters separately).
-\code{\link{ras_detect}},
-\code{\link{ras_validate}} for the changepoint detection steps.
-\code{\link{plot.ras}} for the plotting step.
-\code{\link{ras_memory}} to check memory requirements before
-loading large genotype data.
+\code{\link{ras_scan}}, \code{\link{ras_detect}},
+\code{\link{ras_validate}}, \code{\link{ras_box_detect}},
+\code{\link{plot.ras}}; \code{\link{geno_to_rasbin}} and
+\code{\link{bed_to_rasbin}} to prepare the genotype file;
+\code{\link{ras_original}} for the pure-R implementation.
 }

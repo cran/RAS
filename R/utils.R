@@ -19,14 +19,14 @@
 #' @details
 #' Peak memory is estimated for three pipeline stages:
 #' \describe{
-#'   \item{Stage 1 — \code{\link{compute_gwas_weights}}}{Holds the full
+#'   \item{Stage 1: \code{\link{compute_gwas_weights_original}}}{Holds the full
 #'     \code{geno} matrix plus a small \eqn{N \times 4} coefficient matrix.
 #'     Peak \eqn{\approx} \code{geno_mb + coefmat_mb}.}
-#'   \item{Stage 2 — \code{\link{compute_pgs_matrix}}}{Worst-case holds two
+#'   \item{Stage 2: \code{\link{compute_pgs_matrix}}}{Worst-case holds two
 #'     copies of \code{geno} (R copy-on-modify triggered by
 #'     \code{geno[is.na(geno)] <- 0}) plus the output \code{pgs.mat}.
 #'     Peak \eqn{\approx} \code{2 * geno_mb + pgsmat_mb}.}
-#'   \item{Stage 3 — \code{\link{screen_forward_max_region}}}{Holds
+#'   \item{Stage 3: \code{\link{screen_forward_max_region_original}}}{Holds
 #'     \code{geno} and \code{pgs.mat} simultaneously.
 #'     Peak \eqn{\approx} \code{geno_mb + pgsmat_mb}.}
 #' }
@@ -53,7 +53,7 @@
 #' }
 #'
 #' @seealso
-#' \code{\link{ras_scan}}, \code{\link{ras}} for the
+#' \code{\link{ras_scan_original}}, \code{\link{ras_original}} for the
 #' functions whose memory use is being estimated.
 #' \code{\link{release_memory}} to reclaim heap memory after each repetition.
 #'
@@ -154,7 +154,7 @@ ras_memory <- function(n_total, n_train, n_holdout, n_snps,
   cat(sprintf("  pgs.mat matrix          : %10.1f MB\n", pgsmat_mb))
   cat(sprintf("  coef.mat (GWAS output)  : %10.1f MB\n", coefmat_mb))
   cat("------------------------------------------------------------\n")
-  cat(sprintf("  Stage 1  compute_gwas_weights  peak : %8.1f MB\n", stage1_mb))
+  cat(sprintf("  Stage 1  compute_gwas_weights_original  peak : %8.1f MB\n", stage1_mb))
   cat(sprintf("  Stage 2  compute_pgs_matrix    peak : %8.1f MB  (geno copied)\n",
               stage2_mb))
   cat(sprintf("  Stage 3  screen_forward_max    peak : %8.1f MB\n", stage3_mb))
@@ -245,7 +245,7 @@ ras_memory <- function(n_total, n_train, n_holdout, n_snps,
 #'   \code{min(length(y), x0 + window.size)}.  Default \code{50}.
 #'
 #' @details
-#' This function is used by \code{\link{ras_detect}}
+#' This function is used by \code{\link{ras_detect}} (and \code{\link{ras_detect_original}})
 #' after the sliding-window loop to snap each accepted changepoint index to
 #' the nearest local peak in the \eqn{-\log_{10}(p)} profile.  Snapping to
 #' the peak ensures that reported positions correspond to the most significant

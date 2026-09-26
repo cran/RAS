@@ -8,122 +8,160 @@
 \description{
 The RAS package implements the Regional Association Score method for
 genome-wide association studies.  It converts per-SNP effect sizes into a
-genomic \eqn{-\log_{10}(p)} time series and applies changepoint detection
-to locate peaks that mark significant association regions.  The method
-supports both continuous and binary traits.
+genomic \eqn{-\log_{10}(p)} profile and locates association regions on
+that profile with one of two detectors.  The method supports both
+continuous and binary traits.
 }
-\section{Option A — one call (recommended)}{
+\section{Option A, one call (recommended)}{
 
 \code{\link{ras}} runs the complete pipeline and returns a \code{"ras"}
-object; use \code{\link{plot.ras}} to visualise results.
+object.  Its first argument is either an in-memory genotype matrix or the
+path to a chunked on-disk \code{.rasbin} file (\code{\link{geno_to_rasbin}},
+\code{\link{bed_to_rasbin}}); genotypes are streamed from the file in
+compiled code, so peak memory is set by \code{chunk_snps} rather than by
+the chromosome.  \code{\link{ras_original}} is the pure-R in-memory
+implementation of 1.0.x, kept for reference.  Use \code{\link{plot.ras}}
+to visualise results.
 \preformatted{
 result <- ras(geno, phenotype, covariates,
               covariate_cols = c("age", "sex", paste0("pc", 1:10)),
               is_continuous  = TRUE,
               chrom = 1, save_dir = "results/")
 
-print(result)             # detected changepoint positions
+bed_to_rasbin("cohort_chr1.bed", "cohort_chr1.rasbin")
+result <- ras("cohort_chr1.rasbin", phenotype, covariates,
+              covariate_cols = c("age", "sex", paste0("pc", 1:10)),
+              is_continuous  = TRUE,
+              chrom = 1, save_dir = "results/")
+
+print(result)             # detected positions / regions
 plot(result)              # full-chromosome scan profile
-plot(result, zoom = TRUE) # zoomed view around each changepoint
+plot(result, zoom = TRUE) # zoomed view around each detection
 }
 }
 
-\section{Option B — step-by-step (advanced)}{
+\section{Option B, step by step (advanced)}{
 
 \code{\link{ras_scan}} \eqn{\to} \code{\link{ras_detect}} \eqn{\to}
-\code{\link{ras_validate}} \eqn{\to} \code{\link{plot.ras}}
+\code{\link{ras_validate}} \eqn{\to} \code{\link{plot.ras}}, or
+\code{\link{ras_scan}} \eqn{\to} \code{\link{ras_box_detect}} \eqn{\to}
+\code{\link{plot.ras}}.
 \preformatted{
-## Step 1: compute averaged -log10(p) profile
+## Step 1: averaged -log10(p) profile
 scan     <- ras_scan(geno, phenotype, covariates,
                      covariate_cols = c("age", "sex", paste0("pc", 1:10)),
                      is_continuous = TRUE, chrom = 1, save_dir = "results/")
 
-## Step 2: first-pass changepoint detection
+## Step 2 + 3, changepoint detector
 detected <- ras_detect(scan$x, scan$y,
                        window_size = 3000,
                        slope.p.values.threshold.left  = 1e-10,
                        slope.p.values.threshold.right = 1e-20)
-
-## Step 3: second-pass validation
 final    <- ras_validate(detected, x = scan$x, y = scan$y,
                          this.skip = 10, p.value.threshold = 1e-10)
+
+## Step 2 + 3, box-scan detector (threshold from ras_box_calibrate())
+final    <- ras_box_detect(scan$x, scan$y, calibration = cal)
 
 ## Step 4: plot
 result   <- structure(
   list(scan = scan, detection = final, chrom = 1, save_dir = "results/"),
   class = "ras")
-
 plot(result)
 plot(result, zoom = TRUE)
 }
 }
 
-\section{Stage 1 — Scan}{
+\section{Stage 1, scan}{
 
 \code{\link{ras_scan}} performs \strong{num_rep} independent 50/50
 train/hold-out splits.  In each repetition it fits per-SNP regressions on
-the training half (\code{\link{compute_gwas_weights}}), builds a weighted
-dosage matrix for the hold-out half (\code{\link{compute_pgs_matrix}}),
-and runs a forward scan (\code{\link{screen_forward_max_region}}) that
+the training half (\code{\link{compute_gwas_weights}}) and runs a forward
+scan on the hold-out half (\code{\link{screen_forward_max_region}}) that
 slides an expanding window and records the minimum \eqn{p}-value at each
-grid position.  The \eqn{-\log_{10}(p)} vectors are averaged across
+grid position, streaming \code{chunk_snps} SNP columns at a time from the
+\code{.rasbin} file.  The \eqn{-\log_{10}(p)} vectors are averaged across
 repetitions.  For continuous traits, covariates are residualised from the
 training phenotype each repetition (no hold-out leakage); for binary
-traits, logistic regression is used in the scan step.
+traits, a Rao score test is used in the scan step.  The pure-R in-memory
+implementation (\code{\link{ras_scan_original}},
+\code{\link{compute_gwas_weights_original}}, \code{\link{compute_pgs_matrix}},
+\code{\link{screen_forward_max_region_original}}) computes the same profile
+and additionally offers the per-window logistic regression
+(\code{scan_test = "glm"}) for binary traits.
+
+When an independent GWAS of the same trait is available, its effect sizes
+can replace the training split: \code{\link{ras_harmonize_sumstats}}
+aligns the external summary statistics to the target variant map and
+\code{\link{ras_scan_external}} scans all samples once with those
+fixed weights.
 }
 
-\section{Stage 2 — First-pass changepoint detection}{
+\section{Stage 2 and 3, changepoint detector (\code{detector = "changepoint"})}{
 
-\code{\link{ras_detect}} slides a window of width \strong{cp_window_size}
-across the profile.  At each position \code{\link{get_break_points}} fits
-a segmented linear model and applies the Davies test.  A candidate is
-retained only when three conditions all hold: Davies \eqn{p <}
-\strong{cp_p_threshold}, left-side slope significantly positive
-(\code{\link{slope_test}}, \eqn{p <} \strong{cp_slope_left}), and
-right-side slope significantly negative (\eqn{p <} \strong{cp_slope_right}).
-Each accepted candidate is snapped to the nearest local peak via
-\code{\link{get_local_maximum}}.
-}
-
-\section{Stage 3 — Second-pass validation}{
-
-\code{\link{ras_validate}} re-tests each first-pass candidate with local
-Davies tests on both sides within a window of half-width
-\strong{second_window_size}.  A candidate is accepted if either side passes
-\eqn{p <} \strong{second_p_threshold}.  Candidates with
+\code{\link{ras_detect}} (pure-R: \code{\link{ras_detect_original}}) slides a
+window of width \strong{cp_window_size} across the profile.  At each
+position \code{\link{get_break_points}} fits a segmented linear model and
+applies the Davies test.  A candidate is retained only when three
+conditions all hold: Davies \eqn{p <} \strong{cp_p_threshold}, left-side
+slope significantly positive (\code{\link{slope_test}}, \eqn{p <}
+\strong{cp_slope_left}), and right-side slope significantly negative
+(\eqn{p <} \strong{cp_slope_right}).  Each accepted candidate is snapped to
+the nearest local peak via \code{\link{get_local_maximum}}.
+\code{\link{ras_validate}} then re-tests each candidate with local Davies
+tests on both sides within a window of half-width
+\strong{second_window_size}; a candidate is accepted if either side passes
+\eqn{p <} \strong{second_p_threshold}, and candidates with
 \eqn{-\log_{10}(p) \le} \strong{min_signal} at the estimated position are
 discarded regardless.
 }
 
-\section{Stage 4 — Plots}{
+\section{Stage 2 and 3, box-scan detector (\code{detector = "box"})}{
+
+\code{\link{ras_box_detect}} scores every window of a set of widths by
+how far its mean stands above both adjacent flanks and above the profile
+background, in the raw \eqn{-\log_{10}(p)} units of the profile
+(\code{\link{ras_box_stat}}), and reports the intervals
+\eqn{[\tau_L, \tau_R]} whose score clears a threshold.  A window inside a
+plateau or on the shoulder of a peak scores about zero, so broad regions
+are delimited at their edges and neighbouring peaks stay separate.  The
+threshold is calibrated on null profiles with
+\code{\link{ras_box_calibrate}}.
+}
+
+\section{Stage 4, plots}{
 
 \code{\link{plot.ras}} with \code{zoom = FALSE} produces two files: the
-RAS scan profile with detected changepoints highlighted, and a dual-axis
-overlay with Davies test significance at every candidate.
-\code{\link{plot.ras}} with \code{zoom = TRUE} produces a multi-panel
-figure with one zoomed panel per changepoint.
+RAS scan profile with detected changepoints or intervals highlighted, and a
+dual-axis overlay with the Davies test significance (or the box-scan
+score) at every candidate.  \code{\link{plot.ras}} with \code{zoom = TRUE}
+produces a multi-panel figure with one zoomed panel per detection.
 }
 
 \seealso{
 \itemize{
-\item \code{\link{compute_gwas_weights}}
-\item \code{\link{compute_pgs_matrix}}
-\item \code{\link{get_break_points}}
-\item \code{\link{get_local_maximum}}
-\item \code{\link{plot.ras}}
-\item \code{\link{print.ras}}
-\item \code{\link{ras}}
-\item \code{\link{ras_detect}}
-\item \code{\link{ras_memory}}
-\item \code{\link{ras_scan}}
-\item \code{\link{ras_validate}}
-\item \code{\link{release_memory}}
-\item \code{\link{screen_forward_max_region}}
-\item \code{\link{slope_test}}
+\item \code{\link{ras}}, \code{\link{ras_scan}}, \code{\link{ras_detect}},
+\code{\link{ras_validate}}, \code{\link{ras_scan_external}}
+\item \code{\link{ras_original}}, \code{\link{ras_scan_original}},
+\code{\link{ras_detect_original}} (pure-R, in-memory)
+\item \code{\link{ras_box_detect}}, \code{\link{ras_box_calibrate}},
+\code{\link{ras_box_stat}}
+\item \code{\link{geno_to_rasbin}}, \code{\link{bed_to_rasbin}},
+\code{\link{rasbin_header}}, \code{\link{rasbin_read_chunk}}
+\item \code{\link{ras_harmonize_sumstats}},
+\code{\link{ras_weights_from_sumstats}},
+\code{\link{ras_sumstats_report}}
+\item \code{\link{compute_gwas_weights_original}},
+\code{\link{compute_pgs_matrix}},
+\code{\link{screen_forward_max_region_original}}
+\item \code{\link{get_break_points}}, \code{\link{get_local_maximum}},
+\code{\link{slope_test}}
+\item \code{\link{plot.ras}}, \code{\link{print.ras}}
+\item \code{\link{ras_memory}}, \code{\link{release_memory}}
 }
 }
 \author{
-Jiahe Jin \email{jiahe.jin@yale.edu} (maintainer),
+Jiahe Jin \email{jiahe.jin@yale.edu},
 Yiran Jiang \email{yiran.jiang@uky.edu},
-Heping Zhang \email{heping.zhang@yale.edu}
+Heping Zhang \email{heping.zhang@yale.edu} (maintainer)
 }

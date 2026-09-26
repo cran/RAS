@@ -26,7 +26,7 @@ Returns the index of the maximum value of \code{y} within a symmetric
 window of half-width \code{window.size} centred at \code{x0}.
 }
 \details{
-This function is used by \code{\link{ras_detect}}
+This function is used by \code{\link{ras_detect}} (and \code{\link{ras_detect_original}})
 after the sliding-window loop to snap each accepted changepoint index to
 the nearest local peak in the \eqn{-\log_{10}(p)} profile.  Snapping to
 the peak ensures that reported positions correspond to the most significant

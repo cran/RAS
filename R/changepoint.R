@@ -41,7 +41,7 @@
 #' }
 #'
 #' @seealso
-#' \code{\link{ras_detect}} which calls this
+#' \code{\link{ras_detect_original}} which calls this
 #' function repeatedly in a sliding-window loop.
 #' \code{\link{slope_test}} for the one-tailed slope verification step.
 #' \code{\link[segmented]{segmented}}, \code{\link[segmented]{davies.test}}
@@ -127,7 +127,7 @@ get_break_points <- function(x, y, t) {
 #' left slope and a negative right slope correspond to the peak shape
 #' expected at a true association region.
 #'
-#' The function is called by \code{\link{ras_detect}}
+#' The function is called by \code{\link{ras_detect_original}}
 #' on both sides of each Davies-significant candidate, using asymmetric
 #' thresholds (\code{cp_slope_left = 1e-10}, \code{cp_slope_right = 1e-20}
 #' by default) to require a steeper descending edge than ascending edge.
@@ -137,7 +137,7 @@ get_break_points <- function(x, y, t) {
 #'
 #' @seealso
 #' \code{\link{get_break_points}} for the Davies test step that precedes this
-#' slope check. \code{\link{ras_detect}} for the
+#' slope check. \code{\link{ras_detect_original}} for the
 #' full detection workflow.
 #'
 #' @examples
@@ -159,15 +159,19 @@ slope_test <- function(x, y, lower.tail) {
 }
 
 
-#' First-Pass Changepoint Detection via Sliding Window
+#' First-Pass Changepoint Detection (Pure-R)
 #'
+#' This is the pure-R, in-memory implementation that RAS 1.0.x shipped under
+#' the plain name. Since 1.1.0 the plain name (\code{\link{ras_detect}}) is the
+#' compiled, disk-backed implementation; this function is kept for reference
+#' and gives the same results.
 #' Scans a \eqn{-\log_{10}(p)}-value sequence using a sliding window to
 #' detect positions where the slope changes significantly from positive to
 #' negative.
 #'
 #' @param x Numeric vector. Predictor sequence (e.g., SNP position indices).
 #' @param y Numeric vector. Response sequence (e.g., \eqn{-\log_{10}(p)}
-#'   values from \code{\link{ras_scan}}).  Must be the same length as
+#'   values from \code{\link{ras_scan_original}}).  Must be the same length as
 #'   \code{x}.
 #' @param p.values.threshold Numeric. Davies test p-value threshold for
 #'   nominating a candidate changepoint.  Default \code{0.01}.
@@ -242,25 +246,26 @@ slope_test <- function(x, y, lower.tail) {
 #' \code{\link{get_break_points}} for the per-window segmented regression.
 #' \code{\link{slope_test}} for the one-tailed slope verification.
 #' \code{\link{get_local_maximum}} for the peak-refinement step.
-#' \code{\link{ras}} for the recommended end-to-end entry point.
+#' \code{\link{ras_original}} for the recommended end-to-end entry point.
 #'
 #' @examples
 #' \donttest{
 #' set.seed(42)
-#' x <- 1:300
-#' y <- c(seq(0, 8, length.out = 150),
-#'        seq(8, 1, length.out = 150)) + rnorm(300, sd = 0.5)
-#' result <- ras_detect(
+#' x <- 1:100
+#' y <- c(seq(0, 8, length.out = 50),
+#'        seq(8, 1, length.out = 50)) + rnorm(100, sd = 0.5)
+#' result <- ras_detect_original(
 #'   x, y,
-#'   window_size             = 150,
-#'   slope_check_window_size = 20,
+#'   window_size             = 50,
+#'   skip                    = 2,
+#'   slope_check_window_size = 10,
 #'   slope.p.values.threshold.left  = 1e-3,
 #'   slope.p.values.threshold.right = 1e-3
 #' )
 #' cat("Detected changepoints:", result$tau_hats, "\n")
 #' }
 #' @export
-ras_detect <- function(x, y, p.values.threshold = 0.01,
+ras_detect_original <- function(x, y, p.values.threshold = 0.01,
                                                   min.length = 10, skip = 1,
                                                   window_size = 3000,
                                                   slope_check_window_size = 30,
@@ -371,14 +376,46 @@ ras_detect <- function(x, y, p.values.threshold = 0.01,
 }
 
 
+# davies.test() can error outright or return a non-finite/NA p-value on a
+# numerically degenerate window (near-constant y, near-collinear x) even when
+# there are enough points to attempt it -- the same failure mode
+# get_break_points() already guards against before calling segmented()/
+# davies.test(). ras_validate() has no equivalent guard, so an NA p-value here
+# used to propagate into `if (p1 < threshold || p2 < threshold)` and crash
+# with "missing value where TRUE/FALSE needed". Treat any failure as "no
+# evidence of a changepoint here" (p = 1), matching the existing <4-point
+# fallback already in this function.
+#
+# `this.df` looks unused below but must stay a named parameter: fit_lm's
+# formula was built with `data = this.df`, and davies.test()/segmented()
+# internally re-derive the model frame via `eval(fit_lm$call$data,
+# parent.frame())` -- i.e. they look for an object literally named
+# `this.df` in *whichever frame called davies.test()*. Before this helper
+# existed, that call site was ras_validate()'s own body, where `this.df`
+# was naturally in scope. Moving the call into a separate helper function
+# breaks that lookup unless the helper also binds an object named
+# `this.df` in its own frame -- without this, davies.test() silently
+# errors ("object 'this.df' not found") on every call, caught by the
+# try() below and misreported as p = 1, which looks identical to "no
+# changepoint here" (this exact regression shipped in the same commit
+# that added this safety wrapper, and made ras_validate() reject every
+# real changepoint until caught against the pig-example benchmark).
+.safe_davies_pvalue <- function(fit_lm, this.df) {
+  this.test <- try(davies.test(fit_lm), silent = TRUE)
+  if (inherits(this.test, "try-error")) return(1.0)
+  p <- suppressWarnings(as.numeric(this.test$p.value))
+  if (length(p) != 1 || !is.finite(p)) return(1.0)
+  p
+}
+
 #' Second-Pass Changepoint Validation
 #'
 #' Validates candidate changepoints from
-#' \code{\link{ras_detect}} by re-running local
+#' \code{\link{ras_detect_original}} by re-running local
 #' Davies tests in windows around each candidate.
 #'
 #' @param this.result List. Output from
-#'   \code{\link{ras_detect}}.
+#'   \code{\link{ras_detect_original}}.
 #' @param x Numeric vector. Predictor sequence used in the original scan.
 #' @param y Numeric vector. Response sequence used in the original scan.
 #' @param this.start Integer. Genomic start position for index re-mapping to
@@ -433,22 +470,23 @@ ras_detect <- function(x, y, p.values.threshold = 0.01,
 #' }
 #'
 #' @seealso
-#' \code{\link{ras_detect}} for the first-pass
+#' \code{\link{ras_detect_original}} for the first-pass
 #' detection step whose output this function takes as input.
 #' \code{\link{plot.ras}} for visualising the validated changepoints.
-#' \code{\link{ras}} for the recommended end-to-end entry point.
+#' \code{\link{ras_original}} for the recommended end-to-end entry point.
 #'
 #' @examples
 #' \donttest{
 #' set.seed(42)
-#' x <- 1:300
-#' y <- c(seq(0, 8, length.out = 150),
-#'        seq(8, 1, length.out = 150)) + rnorm(300, sd = 0.5)
+#' x <- 1:100
+#' y <- c(seq(0, 8, length.out = 50),
+#'        seq(8, 1, length.out = 50)) + rnorm(100, sd = 0.5)
 #'
-#' cp_result <- ras_detect(
+#' cp_result <- ras_detect_original(
 #'   x, y,
-#'   window_size             = 150,
-#'   slope_check_window_size = 20,
+#'   window_size             = 50,
+#'   skip                    = 2,
+#'   slope_check_window_size = 10,
 #'   slope.p.values.threshold.left  = 1e-3,
 #'   slope.p.values.threshold.right = 1e-3
 #' )
@@ -456,7 +494,7 @@ ras_detect <- function(x, y, p.values.threshold = 0.01,
 #' final <- ras_validate(
 #'   cp_result, x = x, y = y,
 #'   this.skip          = 1,
-#'   second_window_size = 30,
+#'   second_window_size = 20,
 #'   p.value.threshold  = 1e-3
 #' )
 #' cat("Validated changepoints:", final$tau_hats, "\n")
@@ -497,11 +535,7 @@ ras_validate <- function(this.result, x, y, this.start = 1, this.skip = 30,
     )
     fit_lm <- lm(y ~ x, data = this.df)
 
-    if (dim(this.df)[1] >= 4) {
-      this.test1 <- davies.test(fit_lm)
-    } else {
-      this.test1 <- list(p.value = 1.0)
-    }
+    p.value1 <- if (dim(this.df)[1] >= 4) .safe_davies_pvalue(fit_lm, this.df) else 1.0
 
     this.df <- data.frame(
       y = y[max((tau_hat - second_window_size), 1):tau_hat],
@@ -509,13 +543,9 @@ ras_validate <- function(this.result, x, y, this.start = 1, this.skip = 30,
     )
     fit_lm <- lm(y ~ x, data = this.df)
 
-    if (dim(this.df)[1] >= 4) {
-      this.test2 <- davies.test(fit_lm)
-    } else {
-      this.test2 <- list(p.value = 1.0)
-    }
+    p.value2 <- if (dim(this.df)[1] >= 4) .safe_davies_pvalue(fit_lm, this.df) else 1.0
 
-    if (this.test1$p.value < p.value.threshold || this.test2$p.value < p.value.threshold) {
+    if (p.value1 < p.value.threshold || p.value2 < p.value.threshold) {
       left.slopes <- c(left.slopes, this.result$slope.left[which(tau_hat == this.result$tau_hats)])
       right.slopes <- c(right.slopes, this.result$slope.right[which(tau_hat == this.result$tau_hats)])
       tau_hats <- c(tau_hats, tau_hat)
@@ -525,7 +555,10 @@ ras_validate <- function(this.result, x, y, this.start = 1, this.skip = 30,
     }
   }
 
-  this.remove <- which(y[tau_hats] <= min_signal)
+  # which() silently skips NA rather than flagging it, so an NA signal value
+  # would otherwise survive the min_signal filter unfiltered; treat NA the
+  # same as "below threshold" (can't confirm signal -> don't keep it).
+  this.remove <- which(is.na(y[tau_hats]) | y[tau_hats] <= min_signal)
   if (length(this.remove) >= 1) {
     tau_hats     <- tau_hats[-this.remove]
     left.slopes  <- left.slopes[-this.remove]

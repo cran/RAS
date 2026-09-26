@@ -15,15 +15,18 @@ in pipeline logs.}
 Invisibly returns the \code{malloc_trim(0)} result:
 \code{1} if heap pages were returned to the OS,
 \code{0} if nothing was returned,
-\code{NA_integer_} on non-Linux platforms.
+\code{NA_integer_} where \code{malloc_trim()} is unavailable (all
+platforms other than glibc Linux).
 }
 \description{
-Runs full garbage collection and, on Linux/glibc, calls
-\code{malloc_trim(0)} to return free heap pages to the operating system.
-Useful after large temporary matrices are removed in memory-heavy RAS
-pipeline stages.
+Runs full garbage collection and, on Linux with the GNU C library (glibc),
+calls \code{malloc_trim(0)} to return free heap pages to the operating
+system. Useful after large temporary matrices are removed in memory-heavy
+RAS pipeline stages.
 }
 \details{
-On non-Linux platforms the C call is skipped and \code{NA} is returned
-silently; no error is raised.
+\code{malloc_trim()} is a glibc extension. On every other platform,
+including Linux systems with another C library such as musl (Alpine
+Linux), Windows and macOS, the call is not compiled in and \code{NA} is
+returned silently; no error is raised.
 }

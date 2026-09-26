@@ -62,7 +62,7 @@ cat("Left slope:      ", result$slope.left,   "\n")
 cat("Right slope:     ", result$slope.right,  "\n")
 }
 \seealso{
-\code{\link{ras_detect}} which calls this
+\code{\link{ras_detect_original}} which calls this
 function repeatedly in a sliding-window loop.
 \code{\link{slope_test}} for the one-tailed slope verification step.
 \code{\link[segmented]{segmented}}, \code{\link[segmented]{davies.test}}

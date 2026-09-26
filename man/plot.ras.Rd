@@ -58,10 +58,14 @@ plot files or rendering to the active graphics device.
 }
 \description{
 S3 plot method for objects of class \code{"ras"} returned by
-\code{\link{ras}}.  When \code{zoom = FALSE} (default) produces the
-full-chromosome scan profile with detected changepoints marked.  When
-\code{zoom = TRUE} produces the zoomed multi-panel figure around each
-detected changepoint.
+\code{\link{ras}} or \code{\link{ras_original}}.  When \code{zoom = FALSE}
+(default) produces the full-chromosome scan profile with detected
+changepoints marked.  When \code{zoom = TRUE} produces the zoomed
+multi-panel figure around each detected changepoint.  For a result
+obtained with \code{detector = "box"} the shaded areas are the detected
+intervals \eqn{[\tau_L, \tau_R]}, the vertical lines mark each interval's
+anchor, and the right-hand axis of the overlay plot shows the box-scan
+score instead of the Davies test significance.
 }
 \examples{
 ## Build a minimal "ras" object by hand (see ras() for the full pipeline)

@@ -1,0 +1,77 @@
+#' First-Pass Changepoint Detection via Sliding Window
+#'
+#' Slides a window of \code{window_size} grid points across the scan profile.
+#' In each window a single-breakpoint segmented regression of \code{y} on
+#' \code{x} is fitted (Muggeo's algorithm with bootstrap restarts) and the
+#' Davies test for the existence of a breakpoint is applied. A breakpoint is
+#' kept as a candidate when the Davies p-value is below
+#' \code{p.values.threshold}, the fitted slope rises on its left and falls on
+#' its right, and one-tailed slope tests in a local window of half-width
+#' \code{slope_check_window_size} confirm both directions. Accepted
+#' candidates are snapped to the nearest local maximum of \code{y}. The
+#' result is passed to \code{\link{ras_validate}} for the second pass.
+#'
+#' The segmented fit and the Davies test are a port to compiled code of
+#' \code{\link[segmented]{segmented}} and \code{\link[segmented]{davies.test}}.
+#' The bootstrap restarts draw from R's random-number stream, so
+#' \code{set.seed()} makes a run reproducible, while results are statistically
+#' rather than bit-for-bit equal to the pure-R implementation
+#' \code{\link{ras_detect_original}}, which calls the \code{segmented} package.
+#'
+#' @param x Numeric vector. Grid positions of the profile (\code{scan$x}).
+#' @param y Numeric vector. Profile values (\code{scan$y}), same length as
+#'   \code{x}.
+#' @param p.values.threshold Numeric. Davies test p-value threshold for a
+#'   candidate. Default \code{0.01}.
+#' @param min.length Integer. Minimum number of grid points on each side of a
+#'   candidate. Default \code{10}.
+#' @param skip Integer. Step, in grid points, between successive window
+#'   starts. Default \code{1}.
+#' @param window_size Integer. Window width in grid points. Default
+#'   \code{3000}; use a value below the profile length for short profiles.
+#' @param slope_check_window_size Integer. Half-width, in grid points, of the
+#'   local window in which the left and right slopes are tested. Default
+#'   \code{30}.
+#' @param slope.p.values.threshold.left,slope.p.values.threshold.right
+#'   Numeric. One-tailed p-value thresholds for the rising left slope and the
+#'   falling right slope. Default \code{1e-10} and \code{1e-20}.
+#'
+#' @return A list with \code{tau_hats} (accepted candidate positions, as
+#'   indices into \code{x}), \code{p.values}, \code{slope.left},
+#'   \code{slope.right} and \code{slope.angle} for those candidates,
+#'   \code{all.changepoints} and \code{all.p.values} for every window
+#'   examined, and \code{previous_tau_hats} (a copy of \code{tau_hats} used by
+#'   \code{\link{ras_validate}}).
+#'
+#' @seealso \code{\link{ras_validate}} for the second pass;
+#'   \code{\link{ras_box_detect}} for the alternative detector;
+#'   \code{\link{ras}}, which runs both passes; \code{\link{ras_detect_original}}.
+#'
+#' @examples
+#' set.seed(42)
+#' x <- 1:100
+#' y <- c(seq(0, 8, length.out = 50), seq(8, 1, length.out = 50)) +
+#'      rnorm(100, sd = 0.5)
+#' cp <- ras_detect(x, y, window_size = 50, slope_check_window_size = 10,
+#'                  slope.p.values.threshold.left  = 1e-3,
+#'                  slope.p.values.threshold.right = 1e-3)
+#' cp$tau_hats
+#' @export
+ras_detect <- function(x, y, p.values.threshold = 0.01,
+                             min.length = 10, skip = 1,
+                             window_size = 3000,
+                             slope_check_window_size = 30,
+                             slope.p.values.threshold.left = 1e-10,
+                             slope.p.values.threshold.right = 1e-20) {
+  res <- .Call("RAS_detect_fast", as.double(x), as.double(y),
+               as.double(p.values.threshold), as.integer(min.length),
+               as.integer(skip), as.integer(window_size),
+               as.integer(slope_check_window_size),
+               as.double(slope.p.values.threshold.left),
+               as.double(slope.p.values.threshold.right),
+               PACKAGE = "RAS")
+  res$tau_hats <- as.integer(res$tau_hats)
+  res$all.changepoints <- as.integer(res$all.changepoints)
+  res$previous_tau_hats <- as.integer(res$previous_tau_hats)
+  res
+}

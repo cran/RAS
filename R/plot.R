@@ -1,10 +1,14 @@
 #' Plot a RAS Result Object
 #'
 #' S3 plot method for objects of class \code{"ras"} returned by
-#' \code{\link{ras}}.  When \code{zoom = FALSE} (default) produces the
-#' full-chromosome scan profile with detected changepoints marked.  When
-#' \code{zoom = TRUE} produces the zoomed multi-panel figure around each
-#' detected changepoint.
+#' \code{\link{ras}} or \code{\link{ras_original}}.  When \code{zoom = FALSE}
+#' (default) produces the full-chromosome scan profile with detected
+#' changepoints marked.  When \code{zoom = TRUE} produces the zoomed
+#' multi-panel figure around each detected changepoint.  For a result
+#' obtained with \code{detector = "box"} the shaded areas are the detected
+#' intervals \eqn{[\tau_L, \tau_R]}, the vertical lines mark each interval's
+#' anchor, and the right-hand axis of the overlay plot shows the box-scan
+#' score instead of the Davies test significance.
 #'
 #' @param x Object of class \code{"ras"} as returned by \code{\link{ras}}.
 #' @param zoom Logical. \code{FALSE} (default) plots the full scan profile;
@@ -105,13 +109,27 @@ plot.ras <- function(x, zoom = FALSE, device = "pdf", p.threshold = 8,
 #' @seealso \code{\link{ras}}, \code{\link{plot.ras}}.
 #' @export
 print.ras <- function(x, ...) {
-  n <- length(x$detection$tau_hats)
+  det <- x$detection
+  if (identical(det$detector, "box")) {
+    r <- det$regions
+    n <- if (is.null(r)) 0L else nrow(r)
+    cat(sprintf("RAS result  chr %s  |  box-scan detector, T >= %.3f  |  %s\n",
+                format(x$chrom), det$threshold,
+                if (n == 0) "no regions detected" else sprintf("%d region(s)", n)))
+    if (n > 0) {
+      show <- data.frame(from = r$pos_L, to = r$pos_R, anchor = r$anchor_pos,
+                         T_box = round(r$T_box, 3), height = round(r$height, 3))
+      print(show, row.names = FALSE)
+    }
+    return(invisible(x))
+  }
+  n <- length(det$tau_hats)
   cat(sprintf(
-    "RAS result  chr %d  |  %s\n",
-    x$chrom,
+    "RAS result  chr %s  |  %s\n",
+    format(x$chrom),
     if (n == 0) "no changepoints detected"
     else sprintf("%d changepoint(s) at: %s",
-                 n, paste(x$detection$tau_hats, collapse = ", "))
+                 n, paste(det$tau_hats, collapse = ", "))
   ))
   invisible(x)
 }
@@ -155,7 +173,7 @@ print.ras <- function(x, ...) {
 #'   is drawn at this level.  Default \code{2.5}.
 #'
 #' @details
-#' \strong{Plot 1 — Scan profile.}  The scan line is drawn segment-by-segment
+#' \strong{Plot 1: scan profile.}  The scan line is drawn segment-by-segment
 #' with colour determined by the local \eqn{-\log_{10}(p)} value:
 #' \itemize{
 #'   \item Red (\code{#d73027}): \eqn{\ge} \strong{p.threshold}
@@ -170,7 +188,7 @@ print.ras <- function(x, ...) {
 #' the total x-range.  When \strong{y_cap} is set, positions above the cap are
 #' shown as arrows with their true value annotated.
 #'
-#' \strong{Plot 2 — Dual-axis overlay.}  The scan profile (left y-axis, blue
+#' \strong{Plot 2: dual-axis overlay.}  The scan profile (left y-axis, blue
 #' line) is overlaid with triangle markers showing the Davies
 #' \eqn{-\log_{10}(p)} for each candidate (right y-axis, coloured by whether
 #' it exceeds \strong{p.threshold}).  Vertical dashed segments connect markers
@@ -209,6 +227,10 @@ plot_ras_scan <- function(x, y, detection.result, this_chrom, save.directory,
   right.slopes     <- detection.result$right.slopes
   all.changepoints <- detection.result$all.changepoints
   all.p.values     <- detection.result$all.p.values
+  # box-scan detector: intervals to shade and a score (not a p-value) to overlay
+  is_box  <- identical(detection.result$detector, "box")
+  regions <- if (is_box) detection.result$regions else NULL
+  box_thr <- if (is_box) detection.result$threshold else NA_real_
 
   # apply xlim subsetting if requested
   if (!is.null(xlim)) {
@@ -216,6 +238,8 @@ plot_ras_scan <- function(x, y, detection.result, this_chrom, save.directory,
     x         <- x[keep]
     y         <- y[keep]
     tau_hats  <- tau_hats[tau_hats >= xlim[1] & tau_hats <= xlim[2]]
+    if (!is.null(regions))
+      regions <- regions[regions$pos_R >= xlim[1] & regions$pos_L <= xlim[2], , drop = FALSE]
     cp_keep   <- all.changepoints >= xlim[1] & all.changepoints <= xlim[2]
     all.changepoints <- all.changepoints[cp_keep]
     all.p.values     <- all.p.values[cp_keep]
@@ -282,8 +306,14 @@ plot_ras_scan <- function(x, y, detection.result, this_chrom, save.directory,
   abline(h = p.threshold, col = col_high, lty = 2, lwd = 0.9)
   abline(h = min_signal,  col = "grey55", lty = 3, lwd = 0.8)
 
-  # shaded region around each detected changepoint
-  if (length(tau_hats) > 0) {
+  # shaded region: the detected interval (box scan) or a narrow band around
+  # each detected changepoint (changepoint detector)
+  if (!is.null(regions) && nrow(regions) > 0) {
+    for (k in seq_len(nrow(regions))) {
+      rect(regions$pos_L[k], 0, regions$pos_R[k], y_ceil,
+           col = col_shade, border = NA)
+    }
+  } else if (length(tau_hats) > 0) {
     for (tau in tau_hats) {
       rect(tau - slope_hw, 0, tau + slope_hw, y_ceil,
            col = col_shade, border = NA)
@@ -391,10 +421,14 @@ plot_ras_scan <- function(x, y, detection.result, this_chrom, save.directory,
   p_range <- if (length(vis_pv) > 0 && max(vis_pv, na.rm = TRUE) > 0) {
     c(0, max(vis_pv, na.rm = TRUE) * 1.5)
   } else c(0, 1)
+  # overlay threshold: Davies -log10 p for the changepoint detector, the
+  # calibrated score threshold for the box scan
+  ov_thr <- if (is_box) box_thr else p.threshold
 
   plot(x, y_display, type = "l", col = col_scan, lwd = 1.6,
        main  = paste0("Chr ", this_chrom,
-                      "  -  RAS Profile & Changepoint Significance"),
+                      if (is_box) "  -  RAS Profile & Box-Scan Score"
+                      else        "  -  RAS Profile & Changepoint Significance"),
        xlim  = range(x),
        ylab  = expression(-log[10](p) ~ "(RAS scan)"),
        xlab  = "SNP Index",
@@ -412,7 +446,7 @@ plot_ras_scan <- function(x, y, detection.result, this_chrom, save.directory,
   }
 
   if (length(vis_cp) > 0) {
-    pt_cols <- ifelse(vis_pv >= p.threshold, col_high, col_mid)
+    pt_cols <- ifelse(vis_pv >= ov_thr, col_high, col_mid)
 
     par(new = TRUE)
     plot(vis_cp, vis_pv,
@@ -424,18 +458,27 @@ plot_ras_scan <- function(x, y, detection.result, this_chrom, save.directory,
              x1 = vis_cp, y1 = 0,
              col = pt_cols, lty = 2, lwd = 0.8)
 
-    abline(h = p.threshold, lty = 2, col = col_high, lwd = 1)
-    text(x[1], p.threshold, sprintf("threshold: p = 1e-%g", p.threshold),
+    abline(h = ov_thr, lty = 2, col = col_high, lwd = 1)
+    text(x[1], ov_thr,
+         if (is_box) sprintf("threshold: T = %.2f", ov_thr)
+         else        sprintf("threshold: p = 1e-%g", ov_thr),
          adj = c(0, -0.4), col = col_high, cex = 0.75)
   }
 
   axis(4)
-  mtext(expression(-log[10](p) ~ "(changepoint test)"), side = 4, line = 3)
+  mtext(if (is_box) "box-scan score T (region)"
+        else expression(-log[10](p) ~ "(changepoint test)"), side = 4, line = 3)
 
   legend("bottomright", inset = c(0, -0.35), xpd = TRUE,
          bty = "o", bg = "white", box.col = "grey80",
          cex = 0.72,
-         legend = c(
+         legend = if (is_box) c(
+           "RAS scan profile",
+           sprintf("Region (T >= %.2f)", ov_thr),
+           "Region (weaker)",
+           "Region anchor",
+           "Score threshold"
+         ) else c(
            "RAS scan profile",
            sprintf("Candidate (p >= 1e-%.0f)", p.threshold),
            "Candidate (weaker)",
@@ -517,6 +560,8 @@ plot_ras_zoom_regions <- function(x, y, detection.result,
   right.slopes     <- detection.result$right.slopes
   all.changepoints <- detection.result$all.changepoints
   all.p.values     <- detection.result$all.p.values
+  is_box  <- identical(detection.result$detector, "box")
+  regions <- if (is_box) detection.result$regions else NULL
 
   n_tau <- length(tau_hats)
   if (n_tau == 0) { message("No changepoints to zoom into."); return(invisible(NULL)) }
@@ -576,13 +621,15 @@ plot_ras_zoom_regions <- function(x, y, detection.result,
     vis_cp  <- all.changepoints[cp_in]
     vis_pv  <- all.p.values[cp_in]
 
-    # title p-value label
+    # title label: Davies p-value (changepoint detector) or box score
     nearest <- which.min(abs(all.changepoints - tau))
     cp_pv   <- all.p.values[nearest]
-    title_lbl <- if (length(cp_pv) > 0 && cp_pv > 0)
-      sprintf("Chr%d  pos %d  (1e-%.1f)", this_chrom, tau, cp_pv)
+    title_lbl <- if (is_box && length(cp_pv) > 0)
+      sprintf("Chr%s  pos %s  (T = %.2f)", format(this_chrom), format(tau), cp_pv)
+    else if (length(cp_pv) > 0 && cp_pv > 0)
+      sprintf("Chr%s  pos %s  (1e-%.1f)", format(this_chrom), format(tau), cp_pv)
     else
-      sprintf("Chr%d  pos %d", this_chrom, tau)
+      sprintf("Chr%s  pos %s", format(this_chrom), format(tau))
 
     # ── draw panel ──────────────────────────────────────────────────────────
     plot(xz, yz, type = "n",
@@ -594,10 +641,16 @@ plot_ras_zoom_regions <- function(x, y, detection.result,
     abline(h = p.threshold, col = col_high, lty = 2, lwd = 0.8)
     abline(h = min_signal,  col = "grey55", lty = 3, lwd = 0.7)
 
-    # shading around tau
-    shade_hw <- zoom_half_width * 0.04
-    rect(tau - shade_hw, 0, tau + shade_hw, y_ceil,
-         col = col_shade, border = NA)
+    # shading: the detected interval (box scan) or a band around tau
+    reg_k <- if (!is.null(regions)) which(regions$anchor_pos == tau)[1] else NA_integer_
+    if (!is.na(reg_k)) {
+      rect(regions$pos_L[reg_k], 0, regions$pos_R[reg_k], y_ceil,
+           col = col_shade, border = NA)
+    } else {
+      shade_hw <- zoom_half_width * 0.04
+      rect(tau - shade_hw, 0, tau + shade_hw, y_ceil,
+           col = col_shade, border = NA)
+    }
 
     # base scan line: smooth single colour (same blue as Plot 2)
     lines(xz, yz, col = "#2c7bb6", lwd = 1.4)

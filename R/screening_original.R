@@ -1,5 +1,9 @@
-#' Forward Scan to Compute the RAS Profile
+#' Forward Scan of the RAS Profile (Pure-R, In-Memory)
 #'
+#' This is the pure-R, in-memory implementation that RAS 1.0.x shipped under
+#' the plain name. Since 1.1.0 the plain name (\code{\link{screen_forward_max_region}}) is the
+#' compiled, disk-backed implementation; this function is kept for reference
+#' and gives the same results.
 #' Slides an expanding window across the genome, accumulating weighted
 #' genotype contributions and testing association with the hold-out phenotype
 #' at each position.
@@ -89,7 +93,7 @@
 #' @seealso
 #' \code{\link{compute_pgs_matrix}} for the step that produces
 #' \code{pgs.mat}.
-#' \code{\link{ras_scan}} for the recommended high-level entry point that
+#' \code{\link{ras_scan_original}} for the recommended high-level entry point that
 #' calls this function automatically for each repetition.
 #'
 #' @examples
@@ -108,7 +112,7 @@
 #'                        paste0("pc", 1:8))
 #' scan_df$phenotype2 <- rnorm(50)
 #'
-#' p_vec <- screen_forward_max_region(
+#' p_vec <- screen_forward_max_region_original(
 #'   geno              = geno,
 #'   pgs.mat           = pgs_mat,
 #'   this.df           = scan_df,
@@ -125,7 +129,7 @@
 #'      xlab = "SNP index", ylab = expression(-log[10](p)))
 #' }
 #' @export
-screen_forward_max_region <- function(geno, pgs.mat, this.df, num_signals,
+screen_forward_max_region_original <- function(geno, pgs.mat, this.df, num_signals,
                               start.point = 1, save.directory = tempdir(), this.chrome = 1,
                               min_window_size = 5, max_window_size = 100,
                               isSimulation = TRUE, this.repetition = 1, screening_round = 1,
@@ -166,7 +170,7 @@ screen_forward_max_region <- function(geno, pgs.mat, this.df, num_signals,
     # model.matrix() applies na.action internally and returns only the complete
     # rows, so testing it afterwards yields a `keep` shorter than this.df. That
     # breaks the length contract this.pgs[keep] relies on below, where keep must
-    # index the full n rows. Same pattern as compute_gwas_weights().
+    # index the full n rows. Same pattern as compute_gwas_weights_original().
     keep <- stats::complete.cases(
       this.df[, unique(c(all.vars(cov_form), "phenotype2")), drop = FALSE])
     Zmat <- stats::model.matrix(cov_form, data = this.df[keep, , drop = FALSE])

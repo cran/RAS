@@ -33,7 +33,7 @@ at the candidate changepoint.  Under this parameterisation a positive
 left slope and a negative right slope correspond to the peak shape
 expected at a true association region.
 
-The function is called by \code{\link{ras_detect}}
+The function is called by \code{\link{ras_detect_original}}
 on both sides of each Davies-significant candidate, using asymmetric
 thresholds (\code{cp_slope_left = 1e-10}, \code{cp_slope_right = 1e-20}
 by default) to require a steeper descending edge than ascending edge.
@@ -51,6 +51,6 @@ slope_test(x_right, y_right, lower.tail = TRUE)  # expect small p (slope < 0)
 }
 \seealso{
 \code{\link{get_break_points}} for the Davies test step that precedes this
-slope check. \code{\link{ras_detect}} for the
+slope check. \code{\link{ras_detect_original}} for the
 full detection workflow.
 }

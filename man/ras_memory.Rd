@@ -52,14 +52,14 @@ go / no-go verdict.
 \details{
 Peak memory is estimated for three pipeline stages:
 \describe{
-\item{Stage 1 — \code{\link{compute_gwas_weights}}}{Holds the full
+\item{Stage 1: \code{\link{compute_gwas_weights_original}}}{Holds the full
 \code{geno} matrix plus a small \eqn{N \times 4} coefficient matrix.
 Peak \eqn{\approx} \code{geno_mb + coefmat_mb}.}
-\item{Stage 2 — \code{\link{compute_pgs_matrix}}}{Worst-case holds two
+\item{Stage 2: \code{\link{compute_pgs_matrix}}}{Worst-case holds two
 copies of \code{geno} (R copy-on-modify triggered by
 \code{geno[is.na(geno)] <- 0}) plus the output \code{pgs.mat}.
 Peak \eqn{\approx} \code{2 * geno_mb + pgsmat_mb}.}
-\item{Stage 3 — \code{\link{screen_forward_max_region}}}{Holds
+\item{Stage 3: \code{\link{screen_forward_max_region_original}}}{Holds
 \code{geno} and \code{pgs.mat} simultaneously.
 Peak \eqn{\approx} \code{geno_mb + pgsmat_mb}.}
 }
@@ -91,7 +91,7 @@ try(ras_memory(
 ))
 }
 \seealso{
-\code{\link{ras_scan}}, \code{\link{ras}} for the
+\code{\link{ras_scan_original}}, \code{\link{ras_original}} for the
 functions whose memory use is being estimated.
 \code{\link{release_memory}} to reclaim heap memory after each repetition.
 }

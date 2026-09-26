@@ -2,43 +2,78 @@
 
 S3method(plot,ras)
 S3method(print,ras)
+S3method(print,ras_box_calibration)
+export(bed_to_rasbin)
 export(compute_gwas_weights)
+export(compute_gwas_weights_fast)
+export(compute_gwas_weights_original)
 export(compute_pgs_matrix)
+export(geno_to_rasbin)
 export(get_break_points)
 export(get_local_maximum)
 export(ras)
+export(ras_box_calibrate)
+export(ras_box_detect)
+export(ras_box_stat)
 export(ras_detect)
+export(ras_detect_fast)
+export(ras_detect_original)
+export(ras_fast)
+export(ras_harmonize_sumstats)
+export(ras_liftover_sumstats)
+export(ras_map_ids_to_rsid)
 export(ras_memory)
+export(ras_original)
+export(ras_read_variant_dictionary)
 export(ras_scan)
+export(ras_scan_external)
+export(ras_scan_external_fast)
+export(ras_scan_external_original)
+export(ras_scan_fast)
+export(ras_scan_original)
+export(ras_sumstats_report)
 export(ras_validate)
+export(ras_weights_from_sumstats)
+export(rasbin_header)
+export(rasbin_read_chunk)
 export(release_memory)
 export(screen_forward_max_region)
+export(screen_forward_max_region_fast)
+export(screen_forward_max_region_original)
 export(slope_test)
-importFrom(grDevices,dev.off)
-importFrom(grDevices,pdf)
-importFrom(grDevices,png)
-importFrom(grDevices,rgb)
-importFrom(graphics,abline)
-importFrom(graphics,arrows)
-importFrom(graphics,axis)
-importFrom(graphics,legend)
-importFrom(graphics,lines)
-importFrom(graphics,mtext)
-importFrom(graphics,par)
-importFrom(graphics,plot)
-importFrom(graphics,plot.new)
-importFrom(graphics,rect)
-importFrom(graphics,segments)
-importFrom(graphics,text)
-importFrom(segmented,davies.test)
-importFrom(segmented,segmented)
-importFrom(segmented,slope)
-importFrom(stats,as.formula)
-importFrom(stats,binomial)
-importFrom(stats,coef)
-importFrom(stats,df.residual)
-importFrom(stats,glm)
-importFrom(stats,lm)
-importFrom(stats,na.omit)
-importFrom(stats,pt)
+importFrom(grDevices,
+  dev.off,
+  pdf,
+  png,
+  rgb
+)
+importFrom(graphics,
+  abline,
+  arrows,
+  axis,
+  legend,
+  lines,
+  mtext,
+  par,
+  plot,
+  plot.new,
+  rect,
+  segments,
+  text
+)
+importFrom(segmented,
+  davies.test,
+  segmented,
+  slope
+)
+importFrom(stats,
+  as.formula,
+  binomial,
+  coef,
+  df.residual,
+  glm,
+  lm,
+  na.omit,
+  pt
+)
 useDynLib(RAS, .registration = TRUE)

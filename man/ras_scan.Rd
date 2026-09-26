@@ -2,7 +2,7 @@
 % Please edit documentation in R/pipeline.R
 \name{ras_scan}
 \alias{ras_scan}
-\title{Run the RAS Scan (Repetition Screening Loop)}
+\title{RAS Stage 1: Averaged Regional Association Profile}
 \usage{
 ras_scan(
   geno,
@@ -17,163 +17,104 @@ ras_scan(
   save_dir = file.path(tempdir(), "RAS"),
   min_window_size = 5,
   max_window_size = 100,
-  scan_test = c("glm", "score")
+  scan_test = c("score", "glm"),
+  chunk_snps = 5000,
+  cores = 1,
+  keep_reps = FALSE,
+  rows = NULL
 )
 }
 \arguments{
-\item{geno}{Matrix of genotype dosages (\eqn{n} samples \eqn{\times}
-\eqn{N} variants). Rows must be aligned with \strong{phenotype} and
-\strong{covariates}.}
+\item{geno}{Either the path to a \code{.rasbin} genotype file (written by
+\code{\link{geno_to_rasbin}} or \code{\link{bed_to_rasbin}}), or an
+in-memory numeric genotype matrix (\eqn{n} samples by \eqn{N} variants).
+A matrix is converted to a temporary \code{.rasbin} file for the run;
+convert once with \code{\link{geno_to_rasbin}} when running repeatedly.}
 
-\item{phenotype}{Numeric vector of length \eqn{n}. Raw phenotype values.
-For continuous traits the function residualises covariates from the
-training phenotype internally each repetition; pass the original
-un-residualised values here.}
+\item{phenotype}{Numeric vector of length \eqn{n}, in the sample order of
+\code{geno}.}
 
-\item{covariates}{Data frame with \eqn{n} rows aligned with \strong{geno}.
-Must contain all columns named in \strong{covariate_cols}; additional
-columns (e.g., an ID column) are silently ignored.}
+\item{covariates}{Data frame with \eqn{n} rows, in the sample order of
+\code{geno}.}
 
-\item{covariate_cols}{Character vector of column names in \strong{covariates}
-to include in the regression models.}
+\item{covariate_cols}{Character vector. Names of the columns of
+\code{covariates} to adjust for.}
 
-\item{is_continuous}{Logical. \code{TRUE} for quantitative traits,
-\code{FALSE} for binary (case/control) traits.}
+\item{is_continuous}{Logical. \code{TRUE} for a quantitative trait,
+\code{FALSE} for a binary (0/1) trait.}
 
-\item{num_rep}{Integer. Number of independent 50/50 splits to average over.
-Default \code{5}.}
+\item{num_rep}{Integer. Number of train/hold-out repetitions to average
+over. Default \code{5}.}
 
-\item{skip1}{Integer. Step size for the primary SNP position grid
-(\code{seq(1, N, by = skip1)}).  Default \code{10}.}
+\item{skip1}{Integer. Stride of the profile grid in SNPs: the profile has
+one value every \code{skip1} SNPs. Default \code{10}.}
 
-\item{skip2}{Integer. Sub-step used to grow the scan window at each grid
-position.  Default \code{20}.}
+\item{skip2}{Integer. Step, in SNPs, by which the scan window grows from
+\code{min_window_size} to \code{max_window_size} at each grid position.
+Default \code{20}.}
 
-\item{chrom}{Integer. Chromosome number used in saved file names.
-Default \code{1}.}
+\item{chrom}{Integer or character. Chromosome label used in the output file
+names. Default \code{1}.}
 
-\item{save_dir}{Character. Directory for intermediate \code{.rds} output
-files; created recursively if it does not exist.  Defaults to a
-per-session subdirectory of \code{\link[base]{tempdir}()}; set an explicit
-path to keep the outputs.}
+\item{save_dir}{Character or \code{NULL}. Directory that receives the
+per-repetition coefficient matrices and the averaged profile; \code{NULL}
+writes nothing. Default \code{file.path(tempdir(), "RAS")}.}
 
-\item{min_window_size}{Integer. Minimum scan window half-size passed to
-\code{\link{screen_forward_max_region}}.  Default \code{5}.}
+\item{min_window_size, max_window_size}{Integer. Smallest and largest scan
+window, in SNPs. Default \code{5} and \code{100}.}
 
-\item{max_window_size}{Integer. Maximum scan window half-size passed to
-\code{\link{screen_forward_max_region}}.  Default \code{100}.}
+\item{scan_test}{Character. Per-window test for a binary trait:
+\code{"score"} (default, Rao score test in closed form) or \code{"glm"}
+(per-window logistic regression, the default of RAS 1.0.x).
+\code{"glm"} runs the in-memory implementation
+\code{\link{ras_scan_original}} and therefore needs a genotype matrix,
+not a \code{.rasbin} path. Ignored for continuous traits.}
 
-\item{scan_test}{Character. Per-window test for binary traits, passed to
-\code{\link{screen_forward_max_region}}.  \code{"glm"} (default) fits a
-full logistic model per window (Wald p-value); \code{"score"} fits the
-null logistic model once and uses a Rao score test per window
-(asymptotically equivalent, much faster at scale).  Has no effect for
-continuous traits.}
+\item{chunk_snps}{Integer. SNP columns held in memory at a time. Bounds
+peak memory at roughly \code{n * chunk_snps * 8} bytes per worker.
+Default \code{5000}.}
+
+\item{cores}{Integer. Number of worker processes the repetitions are spread
+over (a PSOCK cluster). Default \code{1}. Each worker draws its own
+random-number stream, so results with \code{cores > 1} are not
+bit-identical to a serial run with the same seed, and peak memory grows
+roughly in proportion to \code{cores}.}
+
+\item{keep_reps}{Logical. Also return (as \code{$reps}) and save the
+individual per-repetition profiles, which are needed to study the
+split-to-split variability that the average removes. Default
+\code{FALSE}.}
+
+\item{rows}{Integer vector or \code{NULL}. Row indices of the samples to
+use; the train/hold-out splits are drawn within this set. \code{NULL}
+(default) uses all samples. Used by \code{\link{ras}} to calibrate the
+box-scan threshold on a random subset of a large cohort.}
 }
 \value{
-Invisibly returns a named list with two elements:
-\describe{
-\item{\code{x}}{Integer vector of length \eqn{\lceil N /
-    \texttt{skip1} \rceil}. The SNP position index grid
-\code{seq(1, N, by = skip1)}.}
-\item{\code{y}}{Numeric vector, same length as \code{x}. Averaged
-\eqn{-\log_{10}(p)}-value profile across all \strong{num_rep}
-repetitions.}
-}
-The following \code{.rds} files are written to \code{save_dir}:
-\describe{
-\item{\code{chr-<chrom>_coef_mat-<rep>.rds}}{The \eqn{N \times 4}
-GWAS coefficient matrix from repetition \code{rep}.}
-\item{\code{mean_p_values_chr<chrom>_reps1-<num_rep>.rds}}{The
-averaged \eqn{-\log_{10}(p)} vector \code{y}.}
-}
+Invisibly, a list with \code{x} (the SNP index of each grid point,
+\code{seq(1, N, by = skip1)}), \code{y} (the averaged
+\eqn{-\log_{10}(p)} profile) and \code{reps} (a \code{length(x)} by
+\code{num_rep} matrix of per-repetition profiles when
+\code{keep_reps = TRUE}, otherwise \code{NULL}). The averaged profile is
+also written to \code{save_dir} as
+\code{mean_p_values_chr<chrom>_reps1-<num_rep>.rds}.
 }
 \description{
-Computes the averaged \eqn{-\log_{10}(p)}-value profile over
-\strong{num_rep} independent 50/50 train/hold-out splits.
-}
-\details{
-For each of the \strong{num_rep} repetitions the function performs three
-steps:
-
-\enumerate{
-\item \strong{GWAS weights.}  A fresh 50/50 random split of all
-\eqn{n} samples is drawn.  \code{\link{compute_gwas_weights}} fits a
-per-SNP regression on the training half and returns an
-\eqn{N \times 4} coefficient matrix; the first column (effect-size
-estimates) is used as PGS weights.
-\item \strong{PGS contribution matrix.}
-\code{\link{compute_pgs_matrix}} multiplies each hold-out
-individual's dosage vector by the per-SNP weights, producing an
-\eqn{n_{\text{holdout}} \times N} matrix of weighted contributions.
-\item \strong{Forward scan.}
-\code{\link{screen_forward_max_region}} slides an expanding window
-across the genome.  At each position it accumulates weighted dosages,
-regresses them against the hold-out phenotype, and records the minimum
-\eqn{p}-value over window sizes in
-\code{[min_window_size, max_window_size]}.  The result is a vector of
-\eqn{-\log_{10}(p)} values on the grid \code{seq(1, N, by = skip1)}.
-}
-
-The \eqn{-\log_{10}(p)} vectors from all repetitions are summed and
-divided by \strong{num_rep} to form the final profile.
-
-For \strong{continuous traits} (\code{is_continuous = TRUE}), covariates
-are residualised from the training phenotype using only training
-individuals before the GWAS step, so no hold-out information leaks into
-the effect-size estimates.  The residualisation is repeated from the
-original \code{phenotype} vector each repetition.  For \strong{binary
-traits} (\code{is_continuous = FALSE}) the raw phenotype is passed
-directly to the GWAS step, and the scan step fits a logistic model via
-\code{glm(family = binomial())}.
-
-After each repetition the large intermediate matrices (\code{coef.mat},
-\code{pgs.mat}) are removed from the R session and
-\code{\link{release_memory}} is called to return free heap pages to the
-OS.  On Linux/glibc this calls \code{malloc_trim(0)} and can
-substantially reduce RSS between repetitions.
-}
-\examples{
-\donttest{
-set.seed(42)
-n_samp <- 80; n_snp <- 60
-geno <- matrix(
-  sample(0:2, n_samp * n_snp, replace = TRUE, prob = c(0.6, 0.3, 0.1)),
-  nrow = n_samp, ncol = n_snp)
-pheno <- rnorm(n_samp)
-cov_df <- data.frame(age = rnorm(n_samp), sex = rbinom(n_samp, 1, 0.5))
-cov_df$age_squared <- cov_df$age^2
-cov_df$age_sex     <- cov_df$age * cov_df$sex
-for (i in 1:10) cov_df[[paste0("pc", i)]] <- rnorm(n_samp)
-
-scan <- ras_scan(
-  geno            = geno,
-  phenotype       = pheno,
-  covariates      = cov_df,
-  covariate_cols  = c("age", "sex", "age_squared", "age_sex",
-                      paste0("pc", 1:10)),
-  is_continuous   = TRUE,
-  num_rep         = 2,
-  skip1           = 5,
-  skip2           = 5,
-  min_window_size = 2,
-  max_window_size = 10,
-  chrom           = 1,
-  save_dir        = tempdir()
-)
-plot(scan$x, scan$y, type = "l",
-     xlab = "SNP index", ylab = expression(-log[10](p)),
-     main = "RAS scan profile")
-}
+Computes the \eqn{-\log_{10}(p)} profile that the RAS detectors work on.
+The sample is split at random into a training half and a hold-out half
+\code{num_rep} times; in each repetition per-SNP regression weights are
+fitted on the training half (\code{\link{compute_gwas_weights}}) and a
+forward regional scan is run on the hold-out half
+(\code{\link{screen_forward_max_region}}); the profiles are averaged over
+repetitions. Genotypes are streamed from a \code{.rasbin} file in chunks of
+\code{chunk_snps} SNP columns, so peak memory does not grow with the
+chromosome. For a genotype matrix small enough to sit in memory the
+pure-R implementation \code{\link{ras_scan_original}} gives the same
+profile.
 }
 \seealso{
-\code{\link{ras}} for a single-call wrapper that also runs
-changepoint detection and plotting.
-\code{\link{compute_gwas_weights}}, \code{\link{compute_pgs_matrix}},
-\code{\link{screen_forward_max_region}} for the constituent steps.
-\code{\link{ras_detect}},
-\code{\link{ras_validate}} for downstream changepoint analysis.
-\code{\link{ras_memory}} to check memory requirements before
-loading large genotype data.
-\code{\link{release_memory}} for OS-level heap reclamation.
+\code{\link{ras}} for the full pipeline; \code{\link{ras_detect}}
+and \code{\link{ras_box_detect}} for the detectors that consume the
+profile; \code{\link{ras_scan_external}} for a scan with external
+weights; \code{\link{ras_scan_original}} for the pure-R implementation.
 }

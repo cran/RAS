@@ -19,9 +19,9 @@ make_screening_data <- function(N_sample = 40, N_snp = 50) {
   list(geno = geno, pgs.mat = pgs.mat, df = df, N_snp = N_snp)
 }
 
-test_that("screen_forward_max_region returns numeric vector of correct length", {
+test_that("screen_forward_max_region_original returns numeric vector of correct length", {
   d      <- make_screening_data()
-  result <- screen_forward_max_region(
+  result <- screen_forward_max_region_original(
     geno              = d$geno,
     pgs.mat           = d$pgs.mat,
     this.df           = d$df,
@@ -49,8 +49,8 @@ test_that("binary score test agrees with glm and returns valid output", {
     min_window_size = 5, max_window_size = 20,
     is_continuous = FALSE, covariate_formula = "sex + age"
   )
-  p_glm   <- do.call(screen_forward_max_region, c(args, scan_test = "glm"))
-  p_score <- do.call(screen_forward_max_region, c(args, scan_test = "score"))
+  p_glm   <- do.call(screen_forward_max_region_original, c(args, scan_test = "glm"))
+  p_score <- do.call(screen_forward_max_region_original, c(args, scan_test = "score"))
 
   expect_equal(length(p_score), length(seq(1, d$N_snp, by = 10)))
   expect_true(all(p_score >= 0 | is.nan(p_score) | is.infinite(p_score)))
@@ -83,11 +83,11 @@ test_that("incomplete covariate rows are dropped, matching the same data pre-dro
     df_na <- df
     df_na$pc1[na_rows] <- NA
 
-    with_na <- do.call(screen_forward_max_region, c(list(
+    with_na <- do.call(screen_forward_max_region_original, c(list(
       geno = d$geno, pgs.mat = d$pgs.mat, this.df = df_na,
       is_continuous = is_cont, scan_test = test), common))
 
-    pre_dropped <- do.call(screen_forward_max_region, c(list(
+    pre_dropped <- do.call(screen_forward_max_region_original, c(list(
       geno    = d$geno[-na_rows, , drop = FALSE],
       pgs.mat = d$pgs.mat[-na_rows, , drop = FALSE],
       this.df = df[-na_rows, , drop = FALSE],
@@ -104,9 +104,9 @@ test_that("incomplete covariate rows are dropped, matching the same data pre-dro
   expect_same(df_bin, FALSE, "glm")     # binary -> legacy glm path
 })
 
-test_that("screen_forward_max_region returns non-negative values", {
+test_that("screen_forward_max_region_original returns non-negative values", {
   d      <- make_screening_data()
-  result <- screen_forward_max_region(
+  result <- screen_forward_max_region_original(
     geno              = d$geno,
     pgs.mat           = d$pgs.mat,
     this.df           = d$df,

@@ -70,7 +70,7 @@ with detected changepoints marked, and a dual-axis overlay of the profile
 with Davies test significance at each candidate position.
 }
 \details{
-\strong{Plot 1 — Scan profile.}  The scan line is drawn segment-by-segment
+\strong{Plot 1: scan profile.}  The scan line is drawn segment-by-segment
 with colour determined by the local \eqn{-\log_{10}(p)} value:
 \itemize{
 \item Red (\code{#d73027}): \eqn{\ge} \strong{p.threshold}
@@ -85,7 +85,7 @@ are overlaid at each changepoint; their half-width is fixed at 2.5\\% of
 the total x-range.  When \strong{y_cap} is set, positions above the cap are
 shown as arrows with their true value annotated.
 
-\strong{Plot 2 — Dual-axis overlay.}  The scan profile (left y-axis, blue
+\strong{Plot 2: dual-axis overlay.}  The scan profile (left y-axis, blue
 line) is overlaid with triangle markers showing the Davies
 \eqn{-\log_{10}(p)} for each candidate (right y-axis, coloured by whether
 it exceeds \strong{p.threshold}).  Vertical dashed segments connect markers

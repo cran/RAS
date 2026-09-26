@@ -61,13 +61,13 @@ test_that("get_break_points returns p.value=1 on flat data", {
   expect_equal(result$p.values, 1)
 })
 
-# --- ras_detect ---
+# --- ras_detect_original ---
 
-test_that("ras_detect returns list with required elements", {
+test_that("ras_detect_original returns list with required elements", {
   set.seed(42)
   x      <- 1:200
   y      <- make_peak_series(200, peak_pos = 100)
-  result <- ras_detect(x, y, window_size = 100, skip = 10,
+  result <- ras_detect_original(x, y, window_size = 100, skip = 10,
                        slope.p.values.threshold.left  = 1e-3,
                        slope.p.values.threshold.right = 1e-3)
   expected_names <- c("tau_hats", "p.values", "slope.left", "slope.right",
@@ -75,11 +75,11 @@ test_that("ras_detect returns list with required elements", {
   expect_true(all(expected_names %in% names(result)))
 })
 
-test_that("ras_detect output vectors are consistent length", {
+test_that("ras_detect_original output vectors are consistent length", {
   set.seed(42)
   x      <- 1:200
   y      <- make_peak_series(200, peak_pos = 100)
-  result <- ras_detect(x, y, window_size = 100, skip = 10,
+  result <- ras_detect_original(x, y, window_size = 100, skip = 10,
                        slope.p.values.threshold.left  = 1e-3,
                        slope.p.values.threshold.right = 1e-3)
   expect_equal(length(result$tau_hats), length(result$p.values))
@@ -112,4 +112,91 @@ test_that("ras_validate returns list with required elements", {
   expected_names <- c("all.changepoints", "tau_hats", "all.p.values",
                       "left.slopes", "right.slopes")
   expect_true(all(expected_names %in% names(result)))
+  # This is a clean, strong V-shaped signal with a loose 0.5 threshold -- the
+  # real (unmocked) davies.test() must accept it. A regression here (e.g. an
+  # internal helper losing access to the `this.df` object davies.test()
+  # re-derives its model frame from) would silently reject every real
+  # changepoint by falling back to p = 1, while still returning a
+  # correctly-shaped empty result -- so the structural check above alone
+  # cannot catch it.
+  expect_gt(length(result$tau_hats), 0)
+})
+
+test_that("ras_validate's davies.test() call sees the real windowed data, not a fallback p=1 (regression: this.df scoping)", {
+  # .safe_davies_pvalue() calls segmented::davies.test(fit_lm), which
+  # internally re-derives its model frame via eval(fit_lm$call$data,
+  # parent.frame()) -- i.e. it looks for an object literally named
+  # `this.df` in whichever frame *called* davies.test(). If that frame
+  # (.safe_davies_pvalue's own) doesn't bind an object under that exact
+  # name, davies.test() errors ("object 'this.df' not found"), which the
+  # try()-based fallback quietly turns into p = 1 -- indistinguishable from
+  # "no real changepoint" both here and in ras_validate()'s final result.
+  set.seed(1)
+  n <- 100
+  x <- 1:n
+  y <- c(seq(0, 10, length.out = 50), seq(10, 0, length.out = 50)) + rnorm(n, sd = 0.05)
+  this.df <- data.frame(y = y, x = x)
+  fit_lm <- lm(y ~ x, data = this.df)
+
+  p <- RAS:::.safe_davies_pvalue(fit_lm, this.df)
+  expect_lt(p, 0.5)
+})
+
+test_that("ras_validate treats a davies.test() error as p=1 instead of crashing", {
+  x <- 1:100
+  y <- c(seq(0, 10, length.out = 50), seq(10, 0, length.out = 50))
+  mock_first <- list(
+    tau_hats = 50L, p.values = 0.001, slope.left = 0.2, slope.right = -0.2,
+    all.changepoints = 50L, all.p.values = 0.001, slope.angle = 120,
+    previous_tau_hats = 50L
+  )
+
+  testthat::local_mocked_bindings(
+    davies.test = function(...) stop("simulated degenerate-window failure"),
+    .package = "RAS"
+  )
+
+  expect_no_error(
+    result <- ras_validate(mock_first, x = x, y = y,
+                           second_window_size = 30, p.value.threshold = 0.5)
+  )
+  # Neither side's davies.test could be run -> both fall back to p=1 -> not accepted.
+  expect_length(result$tau_hats, 0)
+})
+
+test_that("ras_validate treats a davies.test() NA p-value as p=1 instead of crashing", {
+  x <- 1:100
+  y <- c(seq(0, 10, length.out = 50), seq(10, 0, length.out = 50))
+  mock_first <- list(
+    tau_hats = 50L, p.values = 0.001, slope.left = 0.2, slope.right = -0.2,
+    all.changepoints = 50L, all.p.values = 0.001, slope.angle = 120,
+    previous_tau_hats = 50L
+  )
+
+  testthat::local_mocked_bindings(
+    davies.test = function(...) list(p.value = NA_real_),
+    .package = "RAS"
+  )
+
+  expect_no_error(
+    result <- ras_validate(mock_first, x = x, y = y,
+                           second_window_size = 30, p.value.threshold = 0.5)
+  )
+  expect_length(result$tau_hats, 0)
+})
+
+test_that("ras_validate drops a changepoint whose y-value is NA (min_signal filter)", {
+  x <- 1:100
+  y <- c(seq(0, 10, length.out = 50), seq(10, 0, length.out = 50))
+  y[50] <- NA_real_  # tau_hat's own signal value is NA
+
+  mock_first <- list(
+    tau_hats = 50L, p.values = 0.001, slope.left = 0.2, slope.right = -0.2,
+    all.changepoints = 50L, all.p.values = 0.001, slope.angle = 120,
+    previous_tau_hats = 50L
+  )
+
+  result <- ras_validate(mock_first, x = x, y = y,
+                         second_window_size = 30, p.value.threshold = 0.5)
+  expect_length(result$tau_hats, 0)
 })

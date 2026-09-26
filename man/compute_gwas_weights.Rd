@@ -2,100 +2,63 @@
 % Please edit documentation in R/gwas.R
 \name{compute_gwas_weights}
 \alias{compute_gwas_weights}
-\title{Compute Per-SNP GWAS Effect Size Weights}
+\title{Per-SNP GWAS Effect Size Weights}
 \usage{
 compute_gwas_weights(
-  geno,
+  rasbin_path,
   phenotype1,
   this.sample,
   this.df,
   is_continuous,
-  covariate_formula = NULL
+  covariate_formula = NULL,
+  chunk_snps = 5000
 )
 }
 \arguments{
-\item{geno}{Matrix of genotype dosages (\eqn{n} samples \eqn{\times}
-\eqn{N} variants). Only the rows indexed by \code{this.sample} are used.}
+\item{rasbin_path}{Character. Path to the \code{.rasbin} genotype file.}
 
-\item{phenotype1}{Numeric vector of length \eqn{|\texttt{this.sample}|}.
-Training-split phenotype values.  For continuous traits these should be
-covariate-residualised values; for binary traits, the raw 0/1 indicator.}
+\item{phenotype1}{Numeric vector, one value per training sample: the
+covariate-adjusted residuals for a continuous trait, the raw 0/1 outcome
+for a binary trait.}
 
-\item{this.sample}{Integer vector. Row indices of the training split in
-\code{geno}.}
+\item{this.sample}{Integer vector. 1-based row indices of the training
+samples in the genotype file.}
 
-\item{this.df}{Data frame of covariates with rows aligned to \code{geno}.
-Required for binary traits; used to subset and build the regression data
-frame.  Ignored for continuous traits.}
+\item{this.df}{Data frame of covariates for all samples (indexed by
+\code{this.sample}); used for binary traits only.}
 
-\item{is_continuous}{Logical. \code{TRUE} for quantitative traits,
-\code{FALSE} for binary (case/control) traits.}
+\item{is_continuous}{Logical. \code{TRUE} for a quantitative trait.}
 
-\item{covariate_formula}{Character. The right-hand side of the regression
-formula including the SNP term \code{this.x}.  For example,
-\code{"this.x + age + sex + pc1"}.  If \code{NULL}, a default formula
-with sex, age, age-squared, age-sex interaction, and the first ten
-ancestry PCs is used.}
+\item{covariate_formula}{Character. Right-hand side of the binary-trait
+model, including the SNP term \code{this.x}, for example
+\code{"this.x + age + sex"}. Ignored for continuous traits.}
+
+\item{chunk_snps}{Integer. SNP columns read per disk chunk. Default
+\code{5000}.}
 }
 \value{
-A numeric matrix with \eqn{N} rows and 4 columns:
-\describe{
-\item{\code{Estimate}}{Per-SNP effect-size estimate (slope of the dosage
-term).  The first column is used as PGS weights by
-\code{\link{compute_pgs_matrix}}.}
-\item{\code{Std. Error}}{Standard error of the estimate.}
-\item{\code{t value}}{t-statistic.}
-\item{\code{Pr(>|t|)}}{Two-sided p-value.}
-}
+Numeric matrix with \eqn{N} rows (variants) and columns
+\code{Estimate}, \code{Std. Error}, \code{t value} and \code{Pr(>|t|)}.
+The \code{Estimate} column is the weight vector used by
+\code{\link{screen_forward_max_region}}.
 }
 \description{
-Runs a per-SNP regression on the training split to obtain effect-size
-estimates used as polygenic score (PGS) weights in the forward scan.
+Fits the per-SNP regressions of RAS Stage 1 on the training half of the
+sample: for each variant, \code{phenotype1 ~ dosage} for a continuous trait
+or \code{phenotype1 ~ dosage + covariates} for a binary trait. SNP columns
+are streamed from the \code{.rasbin} file in chunks and only the training
+rows are kept, so the full genotype matrix is never held in memory. The
+pure-R, in-memory implementation is
+\code{\link{compute_gwas_weights_original}}.
 }
 \details{
-For \strong{continuous traits} (\code{is_continuous = TRUE}) the function
-fits \code{lm(phenotype1 ~ this.x)} for each SNP, excluding samples with
-missing dosage via \code{na.omit}.  The covariates are assumed to have
-already been residualised from \code{phenotype1} before this function is
-called (as done in \code{\link{ras_scan}}).
-
-For \strong{binary traits} (\code{is_continuous = FALSE}) the function
-builds a data frame combining the training-split rows of \code{this.df}
-with the dosage column (\code{this.x}) and phenotype (\code{phenotype1}),
-removes incomplete cases with \code{na.omit}, and fits
-\code{lm(phenotype1 ~ covariate_formula)}.  Note that \code{lm} rather
-than \code{glm(family = binomial)} is used at the GWAS weight stage
-to obtain a linear probability approximation to the effect size; this is
-consistent with standard GWAS practice for weight derivation.
-
-Both branches are vectorised: instead of fitting one \code{lm} per SNP, all
-NA-free SNPs are solved in closed form with a single BLAS cross-product
-(continuous) or a batched Frisch-Waugh-Lovell residualisation (binary).
-SNP columns that contain missing dosages are handled individually so the
-result matches \code{lm} + \code{na.omit} exactly.  A single
-\dQuote{Starting GWAS ...} message is printed.
-}
-\examples{
-set.seed(1)
-n_samp <- 60; n_snp <- 10
-geno <- matrix(sample(0:2, n_samp * n_snp, replace = TRUE,
-                      prob = c(0.6, 0.3, 0.1)),
-               nrow = n_samp, ncol = n_snp)
-pheno_train <- rnorm(n_samp)
-
-coef_mat <- compute_gwas_weights(
-  geno              = geno,
-  phenotype1        = pheno_train,
-  this.sample       = seq_len(n_samp),
-  this.df           = data.frame(row.names = seq_len(n_samp)),
-  is_continuous     = TRUE
-)
-dim(coef_mat)        # n_snp x 4
-head(coef_mat, 3)
+Binary traits are fitted by the Frisch-Waugh-Lovell identity: the covariate
+projection is computed once and each SNP costs one residual regression.
+SNPs with a missing dosage in the training rows are refitted on their
+complete rows by downdating the shared covariate cross-products in blocks,
+so post-QC sequencing data with sparse missingness stays fast.
 }
 \seealso{
-\code{\link{compute_pgs_matrix}} for the next step, which multiplies
-these weights by the hold-out genotype matrix.
-\code{\link{ras_scan}} for the recommended high-level entry point that
-calls this function automatically.
+\code{\link{ras_scan}}, which calls this function once per
+repetition; \code{\link{compute_gwas_weights_original}}.
 }
